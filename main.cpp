@@ -284,6 +284,7 @@ static void scanWorker(std::wstring channelBase, bool wantVideos, bool wantShort
         postLog(L"[scan] fetching: " + target);
         std::vector<std::wstring> args = {
             L"yt-dlp",
+            L"--encoding", L"utf-8",
             L"--flat-playlist",
             L"--no-warnings",
             L"--ignore-errors",
@@ -347,6 +348,7 @@ static std::vector<std::wstring> buildDownloadArgs(const VideoEntry &v,
                                                    const DownloadOpts &o) {
     std::vector<std::wstring> a = {
         L"yt-dlp",
+        L"--encoding", L"utf-8",
         L"--no-playlist",
         L"--ignore-errors",
         L"--no-warnings",
@@ -982,6 +984,14 @@ static HWND createMainWindow() {
 
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int nCmdShow) {
     g_hInstance = hInst;
+
+    // Force yt-dlp (Python) to emit UTF-8 on its piped stdout/stderr, so
+    // non-ASCII characters in titles (Turkish, accented Latin, etc.) survive
+    // the round-trip through the pipe instead of being mangled by the system
+    // code page.
+    SetEnvironmentVariableW(L"PYTHONIOENCODING", L"utf-8");
+    SetEnvironmentVariableW(L"PYTHONUTF8", L"1");
+
     INITCOMMONCONTROLSEX icc{};
     icc.dwSize = sizeof(icc);
     icc.dwICC  = ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES;
