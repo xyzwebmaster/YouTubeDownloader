@@ -49,6 +49,7 @@ enum : int {
     ID_LOG,
     ID_COUNT_LABEL,
     ID_TAB_CTRL,
+    ID_GROUP_PLAYLIST,
 };
 
 // Menu IDs (kept high enough to never collide with control IDs above).
@@ -71,6 +72,7 @@ static HINSTANCE g_hInstance = nullptr;
 
 static HWND g_hUrl, g_hType, g_hScan;
 static HWND g_hSelAll, g_hSelNone, g_hInvert, g_hCount;
+static HWND g_hGroupByPlaylist;
 static HWND g_hList;
 static HWND g_hVideoRadio, g_hAudioRadio;
 static HWND g_hVideoQuality, g_hContainer, g_hAudioFormat, g_hAudioQuality;
@@ -124,6 +126,7 @@ static void setUiBusy(bool busy) {
     EnableWindow(g_hSelAll, !busy);
     EnableWindow(g_hSelNone, !busy);
     EnableWindow(g_hInvert, !busy);
+    EnableWindow(g_hGroupByPlaylist, !busy);
 }
 
 static void updateModeUi() {
@@ -166,7 +169,8 @@ static void addEntryToListView(const VideoEntry &e) {
 
     std::wstring dur = formatDuration(e.duration);
     ListView_SetItemText(g_hList, inserted, 1, const_cast<LPWSTR>(dur.c_str()));
-    ListView_SetItemText(g_hList, inserted, 2, const_cast<LPWSTR>(e.title.c_str()));
+    ListView_SetItemText(g_hList, inserted, 2, const_cast<LPWSTR>(e.playlistTitle.c_str()));
+    ListView_SetItemText(g_hList, inserted, 3, const_cast<LPWSTR>(e.title.c_str()));
     ListView_SetCheckState(g_hList, inserted, TRUE);
 }
 
@@ -243,6 +247,8 @@ static void layoutDownloadTab(const RECT& page) {
     pos(g_hSelAll,  x,                y, btnW, rowH);
     pos(g_hSelNone, x + (btnW + 6),   y, btnW, rowH);
     pos(g_hInvert,  x + (btnW + 6)*2, y, 130,  rowH);
+    int afterInvert = x + (btnW + 6)*2 + 130 + 16;
+    pos(g_hGroupByPlaylist, afterInvert, y + 2, 200, rowH - 4);
     pos(g_hCount,   pageW - 200 - pad, y + 4, 200, rowH - 4);
     y += rowH + 4;
 
@@ -250,7 +256,9 @@ static void layoutDownloadTab(const RECT& page) {
     int listH = pageH - y - bottomReserve - pad;
     if (listH < 100) listH = 100;
     pos(g_hList, x, y, pageW - 2 * pad, listH);
-    ListView_SetColumnWidth(g_hList, 2, pageW - 2 * pad - 60 - 80 - 30);
+    // Title (col 3) auto-fills the remaining width: total - Type(60) -
+    // Duration(80) - Playlist(200) - scrollbar/border slack(30).
+    ListView_SetColumnWidth(g_hList, 3, pageW - 2 * pad - 60 - 80 - 200 - 30);
     y += listH + pad;
 
     pos(g_hVideoRadio, x,        y + 4, 160, rowH - 4);
@@ -457,10 +465,12 @@ static void onScanClicked() {
     appendLogToCtrl(L"[scan] base URL: " + base);
     SendMessage(g_hProgress, PBM_SETPOS, 0, 0);
 
+    bool grouping = SendMessage(g_hGroupByPlaylist, BM_GETCHECK, 0, 0) == BST_CHECKED;
+
     g_cancelRequested.store(false);
     setUiBusy(true);
     if (g_workerThread.joinable()) g_workerThread.join();
-    g_workerThread = std::thread(scanWorker, base, wantVideos, wantShorts);
+    g_workerThread = std::thread(scanWorker, base, wantVideos, wantShorts, grouping);
 }
 
 static void onDownloadClicked() {
@@ -649,6 +659,9 @@ static HWND createMainWindow() {
     g_hInvert = CreateWindowExW(0, L"BUTTON", L"Invert selection",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 100, 20, hwnd,
         (HMENU)ID_INVERT,      g_hInstance, nullptr);
+    g_hGroupByPlaylist = CreateWindowExW(0, L"BUTTON", L"Group by playlist",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 100, 20, hwnd,
+        (HMENU)ID_GROUP_PLAYLIST, g_hInstance, nullptr);
     g_hCount = CreateWindowExW(0, L"STATIC", L"0 / 0 selected",
         WS_CHILD | WS_VISIBLE | SS_RIGHT, 0, 0, 100, 20, hwnd,
         (HMENU)(INT_PTR)ID_COUNT_LABEL, g_hInstance, nullptr);
@@ -661,7 +674,8 @@ static HWND createMainWindow() {
     LVCOLUMNW c{}; c.mask = LVCF_TEXT | LVCF_WIDTH;
     c.pszText = (LPWSTR)L"Type";     c.cx = 60;  ListView_InsertColumn(g_hList, 0, &c);
     c.pszText = (LPWSTR)L"Duration"; c.cx = 80;  ListView_InsertColumn(g_hList, 1, &c);
-    c.pszText = (LPWSTR)L"Title";    c.cx = 600; ListView_InsertColumn(g_hList, 2, &c);
+    c.pszText = (LPWSTR)L"Playlist"; c.cx = 200; ListView_InsertColumn(g_hList, 2, &c);
+    c.pszText = (LPWSTR)L"Title";    c.cx = 600; ListView_InsertColumn(g_hList, 3, &c);
 
     g_hVideoRadio = CreateWindowExW(0, L"BUTTON", L"Video (with audio)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON,
@@ -744,7 +758,7 @@ static HWND createMainWindow() {
 
     HWND children[] = {
         lblUrl, g_hUrl, lblType, g_hType, g_hScan,
-        g_hSelAll, g_hSelNone, g_hInvert, g_hCount,
+        g_hSelAll, g_hSelNone, g_hInvert, g_hGroupByPlaylist, g_hCount,
         g_hList,
         g_hVideoRadio, g_hAudioRadio,
         GetDlgItem(hwnd, 1003), g_hVideoQuality,
