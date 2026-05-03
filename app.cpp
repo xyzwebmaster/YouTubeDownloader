@@ -1,6 +1,9 @@
 #include "app.h"
 
 #include "download.h"
+#include "oauth.h"
+#include "settings.h"
+#include "tiktok_dialog.h"
 #include "util.h"
 
 #include <windowsx.h>
@@ -44,6 +47,13 @@ enum : int {
     ID_PROGRESS,
     ID_LOG,
     ID_COUNT_LABEL,
+};
+
+// Menu IDs (kept high enough to never collide with control IDs above).
+enum : int {
+    IDM_FILE_EXIT      = 40001,
+    IDM_TOOLS_TIKTOK   = 40010,
+    IDM_HELP_ABOUT     = 40020,
 };
 
 // ============================== Globals =====================================
@@ -265,6 +275,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case ID_VIDEO_RADIO:
         case ID_AUDIO_RADIO:
             if (code == BN_CLICKED) updateModeUi();
+            break;
+        case IDM_FILE_EXIT:
+            PostMessage(hwnd, WM_CLOSE, 0, 0);
+            break;
+        case IDM_TOOLS_TIKTOK:
+            if (!g_busy.load()) showTikTokSettingsDialog(hwnd);
+            break;
+        case IDM_HELP_ABOUT:
+            MessageBoxW(hwnd,
+                L"YouTube Bulk Downloader\n\n"
+                L"Win32 GUI front-end for yt-dlp.\n"
+                L"With TikTok upload (sandbox / Content Posting API).\n\n"
+                L"https://github.com/xyzwebmaster/YouTubeDownloader",
+                L"About", MB_OK | MB_ICONINFORMATION);
             break;
         }
         return 0;
@@ -505,6 +529,19 @@ static HWND createMainWindow() {
         nullptr, nullptr, g_hInstance, nullptr);
     g_hWnd = hwnd;
 
+    // Menu bar.
+    HMENU hMenu  = CreateMenu();
+    HMENU hFile  = CreatePopupMenu();
+    AppendMenuW(hFile, MF_STRING, IDM_FILE_EXIT, L"E&xit");
+    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hFile, L"&File");
+    HMENU hTools = CreatePopupMenu();
+    AppendMenuW(hTools, MF_STRING, IDM_TOOLS_TIKTOK, L"&TikTok ayarlari...");
+    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hTools, L"&Tools");
+    HMENU hHelp  = CreatePopupMenu();
+    AppendMenuW(hHelp, MF_STRING, IDM_HELP_ABOUT, L"&About");
+    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hHelp, L"&Help");
+    SetMenu(hwnd, hMenu);
+
     NONCLIENTMETRICS ncm{};
     ncm.cbSize = sizeof(ncm);
     SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
@@ -666,6 +703,11 @@ int runApp(HINSTANCE hInst, int nCmdShow) {
     icc.dwICC  = ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&icc);
     OleInitialize(nullptr);
+
+    // Load persisted user settings (TikTok credentials, tokens, etc.)
+    // before any UI element reads them. A missing file is treated as
+    // "no settings yet" — see settings.cpp.
+    Settings::load();
 
     HWND hwnd = createMainWindow();
     ShowWindow(hwnd, nCmdShow);

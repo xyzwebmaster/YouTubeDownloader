@@ -2,8 +2,10 @@
 //
 // Build (MinGW):
 //   g++ -O2 -static -mwindows -DUNICODE -D_UNICODE -o YouTubeDownloader.exe
-//       main.cpp app.cpp download.cpp process.cpp util.cpp http.cpp json.cpp settings.cpp
-//       -lcomctl32 -lcomdlg32 -lshell32 -lole32 -luuid -lwinhttp -lcrypt32
+//       main.cpp app.cpp download.cpp process.cpp util.cpp
+//       http.cpp json.cpp settings.cpp oauth.cpp tiktok_dialog.cpp
+//       -lcomctl32 -lcomdlg32 -lshell32 -lole32 -luuid
+//       -lwinhttp -lcrypt32 -lbcrypt -lws2_32
 
 #ifndef UNICODE
 #define UNICODE

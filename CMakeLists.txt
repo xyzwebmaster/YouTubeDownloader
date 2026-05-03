@@ -13,6 +13,8 @@ add_executable(YouTubeDownloader WIN32
     http.cpp
     json.cpp
     settings.cpp
+    oauth.cpp
+    tiktok_dialog.cpp
 )
 
 target_compile_definitions(YouTubeDownloader PRIVATE
@@ -30,6 +32,8 @@ target_link_libraries(YouTubeDownloader PRIVATE
     uuid
     winhttp
     crypt32
+    bcrypt
+    ws2_32
 )
 
 if(MINGW)
