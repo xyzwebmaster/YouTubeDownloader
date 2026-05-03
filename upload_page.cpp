@@ -4,6 +4,7 @@
 #include "oauth.h"
 #include "settings.h"
 #include "tiktok_dialog.h"
+#include "upload_browser.h"
 #include "upload_tiktok.h"
 #include "util.h"
 
@@ -25,6 +26,11 @@ namespace {
 enum : int {
     ID_UP_STATUS = 5100,
     ID_UP_SETTINGS,
+    ID_UP_BROWSER_SETUP,
+    ID_UP_MODE_API,
+    ID_UP_MODE_BROWSER,
+    ID_UP_CAPTION_LBL,
+    ID_UP_CAPTION,
     ID_UP_LIST,
     ID_UP_ADD,
     ID_UP_REMOVE,
@@ -55,13 +61,26 @@ struct UploadFile {
     std::string  publish_id;
 };
 
-HWND hStatus = nullptr, hSettings = nullptr, hList = nullptr;
+HWND hStatus = nullptr, hSettings = nullptr, hBrowserSetup = nullptr;
+HWND hModeApi = nullptr, hModeBrowser = nullptr;
+HWND hCaptionLbl = nullptr, hCaption = nullptr;
+HWND hList = nullptr;
 HWND hAdd = nullptr, hRemove = nullptr, hClear = nullptr, hAddFolder = nullptr;
 HWND hInfo = nullptr, hUpload = nullptr, hCancel = nullptr;
 HWND hProgress = nullptr, hLog = nullptr;
 
 std::vector<UploadFile> g_files;
 std::thread             g_thread;
+
+enum class UploadMode { Api, Browser };
+UploadMode currentMode() {
+    return Settings::get("tiktok.upload_mode") == "browser"
+        ? UploadMode::Browser : UploadMode::Api;
+}
+void saveMode(UploadMode m) {
+    Settings::set("tiktok.upload_mode", m == UploadMode::Browser ? "browser" : "api");
+    Settings::save();
+}
 
 std::wstring formatSize(long long n) {
     static const wchar_t* units[] = { L"B", L"KB", L"MB", L"GB", L"TB" };
@@ -228,7 +247,7 @@ void onCancelClicked() {
     appendLog(L"[upload] cancel requested");
 }
 
-void uploadWorker(std::vector<int> queue, std::string accessToken) {
+void apiUploadWorker(std::vector<int> queue, std::string accessToken) {
     int total = (int)queue.size();
     int ok = 0;
     for (int i = 0; i < total; ++i) {
@@ -264,46 +283,59 @@ void uploadWorker(std::vector<int> queue, std::string accessToken) {
     PostMessageW(g_hWnd, MSG_DONE, 0, (LPARAM)d);
 }
 
-void setBusyUi(bool busy) {
-    EnableWindow(hUpload,    !busy);
-    EnableWindow(hAdd,       !busy);
-    EnableWindow(hRemove,    !busy);
-    EnableWindow(hClear,     !busy);
-    EnableWindow(hAddFolder, !busy);
-    EnableWindow(hSettings,  !busy);
-    EnableWindow(hCancel,     busy);
+void browserUploadWorker(std::vector<int> queue, std::wstring caption) {
+    int total = (int)queue.size();
+    int ok = 0;
+    for (int i = 0; i < total; ++i) {
+        if (g_cancelRequested.load()) break;
+        int row = queue[i];
+        if (row < 0 || row >= (int)g_files.size()) continue;
+
+        {
+            auto* p = new FileStatusPayload{row, 1, L"", ""};
+            PostMessageW(g_hWnd, MSG_FILE_STATUS, 0, (LPARAM)p);
+        }
+
+        UploadBrowser::UploadResult r = UploadBrowser::uploadOne(
+            g_files[row].path,
+            caption,
+            [](const std::wstring& line) {
+                auto* p = new LogPayload{line};
+                PostMessageW(g_hWnd, MSG_LOG, 0, (LPARAM)p);
+            },
+            [](const std::wstring& /*stage*/) {
+                // Each stage transition flips the row's "Uploading"
+                // indicator on; we don't have a byte-wise progress
+                // signal from the browser path so the bar just stays
+                // at indeterminate 50%.
+            },
+            g_cancelRequested);
+
+        auto* fs = new FileStatusPayload{
+            row, r.success ? 2 : 3, r.error, ""
+        };
+        PostMessageW(g_hWnd, MSG_FILE_STATUS, 0, (LPARAM)fs);
+        if (r.success) ++ok;
+    }
+    auto* d = new DonePayload{g_cancelRequested.load(), total, ok};
+    PostMessageW(g_hWnd, MSG_DONE, 0, (LPARAM)d);
 }
 
-void onUpload() {
-    if (g_busy.load()) {
-        MessageBoxW(g_hWnd, L"Bir is zaten calisiyor (download veya upload).",
-                    L"Mesgul", MB_OK | MB_ICONINFORMATION);
-        return;
-    }
+void setBusyUi(bool busy) {
+    EnableWindow(hUpload,       !busy);
+    EnableWindow(hAdd,          !busy);
+    EnableWindow(hRemove,       !busy);
+    EnableWindow(hClear,        !busy);
+    EnableWindow(hAddFolder,    !busy);
+    EnableWindow(hSettings,     !busy);
+    EnableWindow(hBrowserSetup, !busy);
+    EnableWindow(hModeApi,      !busy);
+    EnableWindow(hModeBrowser,  !busy);
+    EnableWindow(hCaption,      !busy);
+    EnableWindow(hCancel,        busy);
+}
 
-    OAuth::Tokens t;
-    if (!OAuth::loadTokens(t) || t.access_token.empty()) {
-        MessageBoxW(g_hWnd,
-            L"Once Tools -> TikTok ayarlari'ndan baglanmalisin.",
-            L"TikTok bagli degil", MB_OK | MB_ICONWARNING);
-        return;
-    }
-    if (!OAuth::isTokenValid(t)) {
-        std::string key    = OAuth::effectiveClientKey();
-        std::string secret = OAuth::effectiveClientSecret();
-        appendLog(L"[upload] access_token expired, refreshing...");
-        OAuth::AuthResult ar = OAuth::tiktokRefresh(key, secret, t.refresh_token);
-        if (!ar.success) {
-            MessageBoxW(g_hWnd,
-                (L"Token yenilemesi basarisiz: " + ar.error).c_str(),
-                L"TikTok", MB_OK | MB_ICONERROR);
-            return;
-        }
-        OAuth::saveTokens(ar.tokens);
-        t = ar.tokens;
-        refreshAccountStatus();
-    }
-
+std::vector<int> collectQueue() {
     std::vector<int> queue;
     int n = (int)g_files.size();
     for (int i = 0; i < n; ++i) {
@@ -315,22 +347,142 @@ void onUpload() {
             queue.push_back(i);
         }
     }
+    return queue;
+}
+
+void onUpload() {
+    if (g_busy.load()) {
+        MessageBoxW(g_hWnd, L"Bir is zaten calisiyor (download veya upload).",
+                    L"Mesgul", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    UploadMode mode = currentMode();
+
+    if (mode == UploadMode::Api) {
+        OAuth::Tokens t;
+        if (!OAuth::loadTokens(t) || t.access_token.empty()) {
+            MessageBoxW(g_hWnd,
+                L"API modunda yuklemek icin Tools -> TikTok ayarlari'ndan "
+                L"baglanmalisin.",
+                L"TikTok bagli degil", MB_OK | MB_ICONWARNING);
+            return;
+        }
+        if (!OAuth::isTokenValid(t)) {
+            std::string key    = OAuth::effectiveClientKey();
+            std::string secret = OAuth::effectiveClientSecret();
+            appendLog(L"[upload] access_token expired, refreshing...");
+            OAuth::AuthResult ar = OAuth::tiktokRefresh(key, secret, t.refresh_token);
+            if (!ar.success) {
+                MessageBoxW(g_hWnd,
+                    (L"Token yenilemesi basarisiz: " + ar.error).c_str(),
+                    L"TikTok", MB_OK | MB_ICONERROR);
+                return;
+            }
+            OAuth::saveTokens(ar.tokens);
+            t = ar.tokens;
+            refreshAccountStatus();
+        }
+
+        std::vector<int> queue = collectQueue();
+        if (queue.empty()) {
+            MessageBoxW(g_hWnd, L"En az bir dosya isaretle.",
+                        L"Hicbir dosya yok", MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+
+        SendMessage(hProgress, PBM_SETRANGE32, 0, 1000);
+        SendMessage(hProgress, PBM_SETPOS,     0, 0);
+        appendLog(L"[upload] API modu, " + std::to_wstring(queue.size()) + L" dosya");
+
+        g_cancelRequested.store(false);
+        g_busy.store(true);
+        setBusyUi(true);
+        if (g_thread.joinable()) g_thread.join();
+        g_thread = std::thread(apiUploadWorker, std::move(queue), t.access_token);
+        return;
+    }
+
+    // Browser mode.
+    if (!UploadBrowser::isPythonAvailable()) {
+        MessageBoxW(g_hWnd,
+            L"Browser modu Python + Playwright gerektirir.\n\n"
+            L"Bir terminalde:\n"
+            L"  pip install playwright\n"
+            L"  python -m playwright install chromium",
+            L"Python yok", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    std::vector<int> queue = collectQueue();
     if (queue.empty()) {
         MessageBoxW(g_hWnd, L"En az bir dosya isaretle.",
                     L"Hicbir dosya yok", MB_OK | MB_ICONINFORMATION);
         return;
     }
 
+    wchar_t capBuf[2048] = {0};
+    GetWindowTextW(hCaption, capBuf, 2048);
+    std::wstring caption = capBuf;
+
     SendMessage(hProgress, PBM_SETRANGE32, 0, 1000);
-    SendMessage(hProgress, PBM_SETPOS,     0, 0);
-    appendLog(L"[upload] starting " + std::to_wstring(queue.size()) + L" file(s)");
+    SendMessage(hProgress, PBM_SETPOS,     0, 500);   // indeterminate-ish
+    appendLog(L"[upload] Browser modu, " + std::to_wstring(queue.size()) + L" dosya");
+    appendLog(L"[upload] DIKKAT: TikTok otomasyonu hesap banina yol acabilir.");
 
     g_cancelRequested.store(false);
     g_busy.store(true);
     setBusyUi(true);
-
     if (g_thread.joinable()) g_thread.join();
-    g_thread = std::thread(uploadWorker, std::move(queue), t.access_token);
+    g_thread = std::thread(browserUploadWorker, std::move(queue), caption);
+}
+
+void onBrowserSetup() {
+    if (g_busy.load()) return;
+    if (!UploadBrowser::isPythonAvailable()) {
+        MessageBoxW(g_hWnd,
+            L"Python + Playwright gerekli.\n\n"
+            L"Bir terminalde:\n"
+            L"  pip install playwright\n"
+            L"  python -m playwright install chromium",
+            L"Python yok", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    appendLog(L"[browser] setup baslatildi — acilan pencereye giris yap");
+    g_cancelRequested.store(false);
+    g_busy.store(true);
+    setBusyUi(true);
+    if (g_thread.joinable()) g_thread.join();
+    g_thread = std::thread([]() {
+        UploadBrowser::UploadResult r = UploadBrowser::runSetup(
+            [](const std::wstring& line) {
+                auto* p = new LogPayload{line};
+                PostMessageW(g_hWnd, MSG_LOG, 0, (LPARAM)p);
+            },
+            g_cancelRequested);
+        auto* d = new DonePayload{g_cancelRequested.load(), 1, r.success ? 1 : 0};
+        if (!r.success && !r.error.empty()) {
+            auto* lp = new LogPayload{L"[browser] setup failed: " + r.error};
+            PostMessageW(g_hWnd, MSG_LOG, 0, (LPARAM)lp);
+        }
+        PostMessageW(g_hWnd, MSG_DONE, 0, (LPARAM)d);
+    });
+}
+
+void applyModeUi() {
+    UploadMode m = currentMode();
+    SendMessage(hModeApi,     BM_SETCHECK, m == UploadMode::Api     ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessage(hModeBrowser, BM_SETCHECK, m == UploadMode::Browser ? BST_CHECKED : BST_UNCHECKED, 0);
+    bool browser = (m == UploadMode::Browser);
+    EnableWindow(hCaption,      browser);
+    EnableWindow(hCaptionLbl,   browser);
+    EnableWindow(hBrowserSetup, browser);
+    SetWindowTextW(hInfo,
+        browser
+            ? L"Browser modu: TikTok'a tarayici uzerinden dogrudan post atilir. "
+              L"Hesap banı riski var, test hesabiyla dene."
+            : L"API / Inbox modu: video TikTok uygulamasinda Drafts'a duser. "
+              L"Caption ve privacy'i orada belirleyip Post tusuna basacaksin.");
 }
 
 }  // namespace
@@ -348,6 +500,29 @@ std::vector<HWND> createControls(HWND parent, HFONT font) {
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 100, 24,
         parent, (HMENU)(INT_PTR)ID_UP_SETTINGS, hInst, nullptr);
     setFont(hSettings);
+
+    hBrowserSetup = CreateWindowExW(0, L"BUTTON", L"Browser setup...",
+        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 100, 24,
+        parent, (HMENU)(INT_PTR)ID_UP_BROWSER_SETUP, hInst, nullptr);
+    setFont(hBrowserSetup);
+
+    hModeApi = CreateWindowExW(0, L"BUTTON", L"API (Inbox draft)",
+        WS_CHILD | WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON,
+        0, 0, 100, 22, parent, (HMENU)(INT_PTR)ID_UP_MODE_API, hInst, nullptr);
+    setFont(hModeApi);
+    hModeBrowser = CreateWindowExW(0, L"BUTTON", L"Browser (live post)",
+        WS_CHILD | WS_TABSTOP | BS_AUTORADIOBUTTON,
+        0, 0, 100, 22, parent, (HMENU)(INT_PTR)ID_UP_MODE_BROWSER, hInst, nullptr);
+    setFont(hModeBrowser);
+
+    hCaptionLbl = CreateWindowExW(0, L"STATIC", L"Caption (Browser):",
+        WS_CHILD | SS_LEFT, 0, 0, 100, 22,
+        parent, (HMENU)(INT_PTR)ID_UP_CAPTION_LBL, hInst, nullptr);
+    setFont(hCaptionLbl);
+    hCaption = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+        WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL,
+        0, 0, 100, 22, parent, (HMENU)(INT_PTR)ID_UP_CAPTION, hInst, nullptr);
+    setFont(hCaption);
 
     hList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, nullptr,
         WS_CHILD | WS_TABSTOP | LVS_REPORT | LVS_SHOWSELALWAYS,
@@ -404,8 +579,11 @@ std::vector<HWND> createControls(HWND parent, HFONT font) {
     setFont(hLog);
 
     refreshAccountStatus();
+    applyModeUi();
 
-    return { hStatus, hSettings, hList, hAdd, hRemove, hClear, hAddFolder,
+    return { hStatus, hSettings, hBrowserSetup, hModeApi, hModeBrowser,
+             hCaptionLbl, hCaption, hList,
+             hAdd, hRemove, hClear, hAddFolder,
              hInfo, hUpload, hCancel, hProgress, hLog };
 }
 
@@ -415,8 +593,20 @@ void layout(const RECT& r) {
     int H = r.bottom - r.top  - 16;
     int rowH = 26;
 
-    SetWindowPos(hStatus,   nullptr, x,            y + 4, W - 180, rowH - 4, SWP_NOZORDER);
-    SetWindowPos(hSettings, nullptr, x + W - 170,  y,     170,     rowH,     SWP_NOZORDER);
+    // Top row: status (left) + Settings + Browser-setup buttons (right).
+    int btnSettingsW = 160, btnBrowserW = 150, btnGap = 6;
+    int rightBlock = btnSettingsW + btnGap + btnBrowserW;
+    SetWindowPos(hStatus,       nullptr, x, y + 4, W - rightBlock - 8, rowH - 4, SWP_NOZORDER);
+    SetWindowPos(hSettings,     nullptr, x + W - rightBlock,                  y, btnSettingsW, rowH, SWP_NOZORDER);
+    SetWindowPos(hBrowserSetup, nullptr, x + W - btnBrowserW,                 y, btnBrowserW,  rowH, SWP_NOZORDER);
+    y += rowH + 6;
+
+    // Mode row + caption row (mode pinned left, caption fills the rest)
+    SetWindowPos(hModeApi,     nullptr, x,           y + 2, 160, rowH - 4, SWP_NOZORDER);
+    SetWindowPos(hModeBrowser, nullptr, x + 170,     y + 2, 200, rowH - 4, SWP_NOZORDER);
+    y += rowH;
+    SetWindowPos(hCaptionLbl,  nullptr, x,           y + 4, 130, rowH - 4, SWP_NOZORDER);
+    SetWindowPos(hCaption,     nullptr, x + 135,     y, W - 135, rowH, SWP_NOZORDER);
     y += rowH + 6;
 
     int btnRow    = rowH + 6;
@@ -424,7 +614,7 @@ void layout(const RECT& r) {
     int actionRow = rowH + 6;
     int progRow   = 22   + 6;
     int logH      = 120;
-    int listH     = H - btnRow - infoRow - actionRow - progRow - logH - (rowH + 6);
+    int listH     = H - btnRow - infoRow - actionRow - progRow - logH - (rowH + 6) - (rowH * 2 + 12);
     if (listH < 80) listH = 80;
     SetWindowPos(hList, nullptr, x, y, W, listH, SWP_NOZORDER);
     ListView_SetColumnWidth(hList, 2, W - 110 - 100 - 30);
@@ -456,6 +646,15 @@ bool onCommand(HWND mainWnd, int id, int /*code*/) {
         if (g_busy.load()) return true;
         showTikTokSettingsDialog(mainWnd);
         refreshAccountStatus();
+        return true;
+    case ID_UP_BROWSER_SETUP: onBrowserSetup(); return true;
+    case ID_UP_MODE_API:
+        saveMode(UploadMode::Api);
+        applyModeUi();
+        return true;
+    case ID_UP_MODE_BROWSER:
+        saveMode(UploadMode::Browser);
+        applyModeUi();
         return true;
     case ID_UP_ADD:        onAdd();           return true;
     case ID_UP_REMOVE:     onRemove();        return true;

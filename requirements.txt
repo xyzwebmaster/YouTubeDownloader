@@ -1,0 +1,10 @@
+# Python dependencies for the optional Browser-mode TikTok upload
+# (tiktok_uploader.py). Install with:
+#
+#     pip install -r requirements.txt
+#     python -m playwright install chromium
+#
+# Only needed if you pick "Browser (live post)" in the Upload tab.
+# The default API/Inbox mode runs entirely in C++ and needs nothing
+# from Python beyond yt-dlp.
+playwright>=1.40

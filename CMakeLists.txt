@@ -18,6 +18,7 @@ add_executable(YouTubeDownloader WIN32
     oauth.cpp
     tiktok_dialog.cpp
     upload_tiktok.cpp
+    upload_browser.cpp
     upload_page.cpp
     app.rc
 )
