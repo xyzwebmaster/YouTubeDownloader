@@ -4,7 +4,13 @@ project(YouTubeDownloader LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(YouTubeDownloader WIN32 main.cpp)
+add_executable(YouTubeDownloader WIN32
+    main.cpp
+    app.cpp
+    download.cpp
+    process.cpp
+    util.cpp
+)
 
 target_compile_definitions(YouTubeDownloader PRIVATE
     UNICODE
