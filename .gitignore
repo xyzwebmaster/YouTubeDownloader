@@ -19,3 +19,6 @@ CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 Makefile
+
+# Private TikTok credentials. tiktok_creds.h.example is the template.
+tiktok_creds.h

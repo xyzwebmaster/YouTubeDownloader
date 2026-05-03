@@ -1,0 +1,23 @@
+// Optional: copy this file to `tiktok_creds.h` (gitignored) and fill in
+// your TikTok app credentials from https://developers.tiktok.com/.
+//
+// When `tiktok_creds.h` is present and the *_CLIENT_KEY/*_CLIENT_SECRET
+// macros below are non-empty, the TikTok settings dialog hides the
+// Client Key / Secret / Redirect URI / Port fields entirely. End users
+// of the built .exe just see a "Connect TikTok" button.
+//
+// SECURITY: anything in this header ends up in the compiled binary.
+// Anyone who can `strings YouTubeDownloader.exe` can read the
+// client_secret. This is the same trade-off Spotify CLI / GitHub CLI /
+// yt-dlp make with their embedded keys — generally tolerated for
+// desktop OAuth, but TikTok can revoke the app key if it's abused.
+// Don't commit `tiktok_creds.h` (the .gitignore rule already covers it).
+#pragma once
+
+#define TIKTOK_DEFAULT_CLIENT_KEY     ""
+#define TIKTOK_DEFAULT_CLIENT_SECRET  ""
+
+// The redirect URI must be registered EXACTLY this way on the developer
+// portal — TikTok rejects mismatches with redirect_uri_mismatch.
+#define TIKTOK_DEFAULT_REDIRECT_URI   "http://localhost:53682/callback"
+#define TIKTOK_DEFAULT_LISTENER_PORT  53682

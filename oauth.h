@@ -49,4 +49,19 @@ void clearTokens();
 // True if the access token isn't empty and has at least 30s of life left.
 bool isTokenValid(const Tokens& t);
 
+// ------------- Effective credential resolution -------------
+// True if compile-time embedded credentials (via tiktok_creds.h) are
+// non-empty. When true, the settings dialog hides the key/secret/etc.
+// fields and the OAuth helpers below pull from the embedded values.
+bool hasEmbeddedCreds();
+
+// Each effective getter returns the user's saved Settings value if set,
+// otherwise the compile-time default from tiktok_creds.h, otherwise an
+// empty string / sensible fallback. Use these at any place that runs
+// the OAuth flow rather than reading Settings directly.
+std::string effectiveClientKey();
+std::string effectiveClientSecret();
+std::string effectiveRedirectUri();
+int         effectiveListenerPort();
+
 }  // namespace OAuth

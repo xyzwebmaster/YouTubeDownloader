@@ -289,8 +289,8 @@ void onUpload() {
         return;
     }
     if (!OAuth::isTokenValid(t)) {
-        std::string key    = Settings::get("tiktok.client_key");
-        std::string secret = Settings::get("tiktok.client_secret");
+        std::string key    = OAuth::effectiveClientKey();
+        std::string secret = OAuth::effectiveClientSecret();
         appendLog(L"[upload] access_token expired, refreshing...");
         OAuth::AuthResult ar = OAuth::tiktokRefresh(key, secret, t.refresh_token);
         if (!ar.success) {

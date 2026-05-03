@@ -80,27 +80,40 @@ void updateStatusLine(DlgState* s) {
 }
 
 void setInputsEnabled(DlgState* s, bool en) {
-    EnableWindow(s->hKey,        en);
-    EnableWindow(s->hSecret,     en);
-    EnableWindow(s->hRedirect,   en);
-    EnableWindow(s->hPort,       en);
-    EnableWindow(s->hConnect,    en);
-    EnableWindow(s->hOK,         en);
-    EnableWindow(s->hCancel,     en);
+    if (s->hKey)      EnableWindow(s->hKey,      en);
+    if (s->hSecret)   EnableWindow(s->hSecret,   en);
+    if (s->hRedirect) EnableWindow(s->hRedirect, en);
+    if (s->hPort)     EnableWindow(s->hPort,     en);
+    EnableWindow(s->hConnect, en);
+    EnableWindow(s->hOK,      en);
+    EnableWindow(s->hCancel,  en);
 }
 
 void onConnect(HWND hwnd, DlgState* s) {
     if (s->oauthBusy.load()) return;
 
-    wchar_t kBuf[1024], sBuf[1024], rBuf[1024], pBuf[64];
-    GetWindowTextW(s->hKey,      kBuf, 1024);
-    GetWindowTextW(s->hSecret,   sBuf, 1024);
-    GetWindowTextW(s->hRedirect, rBuf, 1024);
-    GetWindowTextW(s->hPort,     pBuf, 64);
-    std::string key      = w2s(kBuf);
-    std::string secret   = w2s(sBuf);
-    std::string redirect = w2s(rBuf);
-    int port = _wtoi(pBuf);
+    // When fields exist (non-embedded mode), prefer the user's currently-
+    // typed values so they can test edits without OK first. When the
+    // fields don't exist (embedded mode), fall back to the effective
+    // resolver which pulls from compile-time defaults.
+    std::string key, secret, redirect;
+    int port;
+    if (s->hKey) {
+        wchar_t kBuf[1024], sBuf[1024], rBuf[1024], pBuf[64];
+        GetWindowTextW(s->hKey,      kBuf, 1024);
+        GetWindowTextW(s->hSecret,   sBuf, 1024);
+        GetWindowTextW(s->hRedirect, rBuf, 1024);
+        GetWindowTextW(s->hPort,     pBuf, 64);
+        key      = w2s(kBuf);
+        secret   = w2s(sBuf);
+        redirect = w2s(rBuf);
+        port     = _wtoi(pBuf);
+    } else {
+        key      = OAuth::effectiveClientKey();
+        secret   = OAuth::effectiveClientSecret();
+        redirect = OAuth::effectiveRedirectUri();
+        port     = OAuth::effectiveListenerPort();
+    }
     if (port <= 0 || port > 65535) port = 53682;
     if (key.empty() || secret.empty()) {
         MessageBoxW(hwnd, L"Client Key ve Client Secret gerekli.",
@@ -135,12 +148,17 @@ LRESULT CALLBACK DlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND: {
         int id = LOWORD(wp);
         if (id == ID_TT_OK) {
-            wchar_t buf[1024];
-            GetWindowTextW(s->hKey,      buf, 1024); Settings::setW("tiktok.client_key",     buf);
-            GetWindowTextW(s->hSecret,   buf, 1024); Settings::setW("tiktok.client_secret",  buf);
-            GetWindowTextW(s->hRedirect, buf, 1024); Settings::setW("tiktok.redirect_uri",   buf);
-            GetWindowTextW(s->hPort,     buf, 1024); Settings::setW("tiktok.listener_port",  buf);
-            Settings::save();
+            // Only persist edits the dialog actually showed — in embedded
+            // mode the field hwnds are nullptr and there's nothing to
+            // save (the credentials live in tiktok_creds.h, not Settings).
+            if (s->hKey) {
+                wchar_t buf[1024];
+                GetWindowTextW(s->hKey,      buf, 1024); Settings::setW("tiktok.client_key",     buf);
+                GetWindowTextW(s->hSecret,   buf, 1024); Settings::setW("tiktok.client_secret",  buf);
+                GetWindowTextW(s->hRedirect, buf, 1024); Settings::setW("tiktok.redirect_uri",   buf);
+                GetWindowTextW(s->hPort,     buf, 1024); Settings::setW("tiktok.listener_port",  buf);
+                Settings::save();
+            }
             s->result = true;
             DestroyWindow(hwnd);
         } else if (id == ID_TT_CANCEL) {
@@ -233,7 +251,13 @@ bool showTikTokSettingsDialog(HWND parent) {
     SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
     st.hFont = CreateFontIndirectW(&ncm.lfMessageFont);
 
-    const int W = 640, H = 540;
+    // Embedded mode: client_key/secret are baked into the binary via
+    // tiktok_creds.h, so we skip the credential fields entirely and the
+    // dialog shrinks to just status + Connect/Disconnect + log.
+    const bool embedded = OAuth::hasEmbeddedCreds();
+
+    const int W = 640;
+    const int H = embedded ? 360 : 540;
     RECT pr;
     GetWindowRect(parent, &pr);
     int x = pr.left + ((pr.right  - pr.left)   - W) / 2;
@@ -255,44 +279,56 @@ bool showTikTokSettingsDialog(HWND parent) {
     int padX = 12, lblW = 120, ctrlX = padX + lblW + 8;
     int row = 12, rowH = 26;
 
-    mkLabel(dlg, hInst, st.hFont, padX, row + 4, lblW, rowH - 4, L"Client Key:");
-    st.hKey = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT",
-        Settings::getW("tiktok.client_key").c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        ctrlX, row, W - ctrlX - padX, rowH, dlg, (HMENU)ID_TT_KEY, hInst, nullptr);
-    setFont(st.hKey);
-    row += rowH + 4;
+    if (!embedded) {
+        mkLabel(dlg, hInst, st.hFont, padX, row + 4, lblW, rowH - 4, L"Client Key:");
+        st.hKey = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT",
+            Settings::getW("tiktok.client_key").c_str(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+            ctrlX, row, W - ctrlX - padX, rowH, dlg, (HMENU)ID_TT_KEY, hInst, nullptr);
+        setFont(st.hKey);
+        row += rowH + 4;
 
-    mkLabel(dlg, hInst, st.hFont, padX, row + 4, lblW, rowH - 4, L"Client Secret:");
-    st.hSecret = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT",
-        Settings::getW("tiktok.client_secret").c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_PASSWORD,
-        ctrlX, row, W - ctrlX - padX, rowH, dlg, (HMENU)ID_TT_SECRET, hInst, nullptr);
-    setFont(st.hSecret);
-    row += rowH + 4;
+        mkLabel(dlg, hInst, st.hFont, padX, row + 4, lblW, rowH - 4, L"Client Secret:");
+        st.hSecret = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT",
+            Settings::getW("tiktok.client_secret").c_str(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_PASSWORD,
+            ctrlX, row, W - ctrlX - padX, rowH, dlg, (HMENU)ID_TT_SECRET, hInst, nullptr);
+        setFont(st.hSecret);
+        row += rowH + 4;
 
-    mkLabel(dlg, hInst, st.hFont, padX, row + 4, lblW, rowH - 4, L"Redirect URI:");
-    std::wstring redirDef = Settings::getW("tiktok.redirect_uri",
-                                           L"http://localhost:53682/callback");
-    st.hRedirect = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", redirDef.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        ctrlX, row, W - ctrlX - padX - 110, rowH,
-        dlg, (HMENU)ID_TT_REDIRECT, hInst, nullptr);
-    setFont(st.hRedirect);
-    st.hPortal = CreateWindowExW(0, L"BUTTON", L"Dev portal...",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-        W - padX - 100, row, 100, rowH,
-        dlg, (HMENU)ID_TT_OPEN_PORTAL, hInst, nullptr);
-    setFont(st.hPortal);
-    row += rowH + 4;
+        mkLabel(dlg, hInst, st.hFont, padX, row + 4, lblW, rowH - 4, L"Redirect URI:");
+        std::wstring redirDef = Settings::getW("tiktok.redirect_uri",
+                                               L"http://localhost:53682/callback");
+        st.hRedirect = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", redirDef.c_str(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+            ctrlX, row, W - ctrlX - padX - 110, rowH,
+            dlg, (HMENU)ID_TT_REDIRECT, hInst, nullptr);
+        setFont(st.hRedirect);
+        st.hPortal = CreateWindowExW(0, L"BUTTON", L"Dev portal...",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            W - padX - 100, row, 100, rowH,
+            dlg, (HMENU)ID_TT_OPEN_PORTAL, hInst, nullptr);
+        setFont(st.hPortal);
+        row += rowH + 4;
 
-    mkLabel(dlg, hInst, st.hFont, padX, row + 4, lblW, rowH - 4, L"Listener port:");
-    std::wstring portDef = Settings::getW("tiktok.listener_port", L"53682");
-    st.hPort = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", portDef.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_NUMBER,
-        ctrlX, row, 100, rowH, dlg, (HMENU)ID_TT_PORT, hInst, nullptr);
-    setFont(st.hPort);
-    row += rowH + 4;
+        mkLabel(dlg, hInst, st.hFont, padX, row + 4, lblW, rowH - 4, L"Listener port:");
+        std::wstring portDef = Settings::getW("tiktok.listener_port", L"53682");
+        st.hPort = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", portDef.c_str(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_NUMBER,
+            ctrlX, row, 100, rowH, dlg, (HMENU)ID_TT_PORT, hInst, nullptr);
+        setFont(st.hPort);
+        row += rowH + 4;
+    } else {
+        // Embedded-mode banner. No fields to fill — go straight to Connect.
+        HWND banner = CreateWindowExW(0, L"STATIC",
+            L"App credentials uygulamaya gomulu — Connect'e bas, "
+            L"tarayicidan giris yap.",
+            WS_CHILD | WS_VISIBLE | SS_LEFT,
+            padX, row + 4, W - 2 * padX, rowH - 4,
+            dlg, nullptr, hInst, nullptr);
+        setFont(banner);
+        row += rowH + 12;
+    }
 
     mkLabel(dlg, hInst, st.hFont, padX, row + 4, lblW, rowH - 4, L"Scope:");
     st.hScope = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT",
@@ -345,7 +381,7 @@ bool showTikTokSettingsDialog(HWND parent) {
     EnableWindow(parent, FALSE);
     ShowWindow(dlg, SW_SHOW);
     UpdateWindow(dlg);
-    SetFocus(st.hKey);
+    SetFocus(embedded ? st.hConnect : st.hKey);
 
     // Modal loop. We can't use PostQuitMessage to break out (that would
     // also terminate the main app's outer loop), so we wait on a flag set

@@ -21,6 +21,28 @@
 #pragma comment(lib, "ws2_32.lib")
 #endif
 
+// Optional compile-time embedded credentials. If `tiktok_creds.h` exists
+// next to this file (gitignored — see tiktok_creds.h.example for the
+// template), it defines TIKTOK_DEFAULT_CLIENT_KEY / _CLIENT_SECRET etc.
+// and hasEmbeddedCreds() flips to true.
+#if defined(__has_include)
+#  if __has_include("tiktok_creds.h")
+#    include "tiktok_creds.h"
+#  endif
+#endif
+#ifndef TIKTOK_DEFAULT_CLIENT_KEY
+#  define TIKTOK_DEFAULT_CLIENT_KEY     ""
+#endif
+#ifndef TIKTOK_DEFAULT_CLIENT_SECRET
+#  define TIKTOK_DEFAULT_CLIENT_SECRET  ""
+#endif
+#ifndef TIKTOK_DEFAULT_REDIRECT_URI
+#  define TIKTOK_DEFAULT_REDIRECT_URI   "http://localhost:53682/callback"
+#endif
+#ifndef TIKTOK_DEFAULT_LISTENER_PORT
+#  define TIKTOK_DEFAULT_LISTENER_PORT  53682
+#endif
+
 namespace {
 
 bool g_wsaInit = false;
@@ -436,6 +458,34 @@ bool isTokenValid(const Tokens& t) {
     if (t.access_token.empty()) return false;
     long long now = (long long)std::time(nullptr);
     return t.expires_at > now + 30;
+}
+
+bool hasEmbeddedCreds() {
+    return TIKTOK_DEFAULT_CLIENT_KEY[0] != '\0'
+        && TIKTOK_DEFAULT_CLIENT_SECRET[0] != '\0';
+}
+
+std::string effectiveClientKey() {
+    std::string s = Settings::get("tiktok.client_key");
+    return !s.empty() ? s : std::string(TIKTOK_DEFAULT_CLIENT_KEY);
+}
+
+std::string effectiveClientSecret() {
+    std::string s = Settings::get("tiktok.client_secret");
+    return !s.empty() ? s : std::string(TIKTOK_DEFAULT_CLIENT_SECRET);
+}
+
+std::string effectiveRedirectUri() {
+    std::string s = Settings::get("tiktok.redirect_uri");
+    return !s.empty() ? s : std::string(TIKTOK_DEFAULT_REDIRECT_URI);
+}
+
+int effectiveListenerPort() {
+    std::string s = Settings::get("tiktok.listener_port");
+    if (!s.empty()) {
+        try { return std::stoi(s); } catch (...) {}
+    }
+    return TIKTOK_DEFAULT_LISTENER_PORT;
 }
 
 }  // namespace OAuth
