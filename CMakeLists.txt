@@ -10,6 +10,9 @@ add_executable(YouTubeDownloader WIN32
     download.cpp
     process.cpp
     util.cpp
+    http.cpp
+    json.cpp
+    settings.cpp
 )
 
 target_compile_definitions(YouTubeDownloader PRIVATE
@@ -25,6 +28,8 @@ target_link_libraries(YouTubeDownloader PRIVATE
     shell32
     ole32
     uuid
+    winhttp
+    crypt32
 )
 
 if(MINGW)

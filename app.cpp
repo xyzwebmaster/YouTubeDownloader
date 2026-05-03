@@ -13,10 +13,14 @@
 #include <functional>
 
 // ----- Comctl32 v6 manifest (modern controls + visual styles) -----
+// MSVC embeds this directly; MinGW ignores the pragma and would need a
+// separate .manifest file at link time to get visual styles.
+#ifdef _MSC_VER
 #pragma comment(linker,"/manifestdependency:\"type='win32' "                     \
                        "name='Microsoft.Windows.Common-Controls' "               \
                        "version='6.0.0.0' processorArchitecture='*' "            \
                        "publicKeyToken='6595b64144ccf1df' language='*'\"")
+#endif
 
 // ============================== IDs =========================================
 enum : int {
