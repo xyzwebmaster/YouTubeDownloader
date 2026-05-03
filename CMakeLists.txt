@@ -15,6 +15,8 @@ add_executable(YouTubeDownloader WIN32
     settings.cpp
     oauth.cpp
     tiktok_dialog.cpp
+    upload_tiktok.cpp
+    upload_page.cpp
 )
 
 target_compile_definitions(YouTubeDownloader PRIVATE

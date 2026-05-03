@@ -4,6 +4,7 @@
 //   g++ -O2 -static -mwindows -DUNICODE -D_UNICODE -o YouTubeDownloader.exe
 //       main.cpp app.cpp download.cpp process.cpp util.cpp
 //       http.cpp json.cpp settings.cpp oauth.cpp tiktok_dialog.cpp
+//       upload_tiktok.cpp upload_page.cpp
 //       -lcomctl32 -lcomdlg32 -lshell32 -lole32 -luuid
 //       -lwinhttp -lcrypt32 -lbcrypt -lws2_32
 

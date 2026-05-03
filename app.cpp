@@ -4,6 +4,7 @@
 #include "oauth.h"
 #include "settings.h"
 #include "tiktok_dialog.h"
+#include "upload_page.h"
 #include "util.h"
 
 #include <windowsx.h>
@@ -47,6 +48,7 @@ enum : int {
     ID_PROGRESS,
     ID_LOG,
     ID_COUNT_LABEL,
+    ID_TAB_CTRL,
 };
 
 // Menu IDs (kept high enough to never collide with control IDs above).
@@ -76,6 +78,14 @@ static HWND g_hOutput, g_hBrowse;
 static HWND g_hDownload, g_hCancel, g_hProgress;
 static HWND g_hLog;
 static HFONT g_hFont = nullptr;
+
+// Tab control + per-tab control vectors. The tab control takes the entire
+// client area (below the menu); each tab's controls are children of the
+// main window and are show/hidden when the active tab changes.
+static HWND               g_hTabs       = nullptr;
+static int                g_currentTab  = 0;
+static std::vector<HWND>  g_dlControls;
+static std::vector<HWND>  g_upControls;
 
 static std::vector<int> g_queue;
 static int              g_doneCount = 0;
@@ -176,78 +186,106 @@ static void drainQueuedAppPayloads(HWND hwnd) {
         default: break;
         }
     }
+    UploadPage::drainQueuedPayloads(hwnd);
+}
+
+// Switch the visible tab and re-layout. Called from WM_NOTIFY/TCN_SELCHANGE
+// and once at startup to position whichever tab opens by default.
+static void doLayout(int W, int H);
+static void showTab(int t) {
+    int dlMode = (t == 0) ? SW_SHOW : SW_HIDE;
+    int upMode = (t == 1) ? SW_SHOW : SW_HIDE;
+    for (HWND h : g_dlControls) ShowWindow(h, dlMode);
+    for (HWND h : g_upControls) ShowWindow(h, upMode);
+    g_currentTab = t;
+    if (t == 1) UploadPage::onShow();
+    RECT rc;
+    GetClientRect(g_hWnd, &rc);
+    doLayout(rc.right, rc.bottom);
 }
 
 // ============================== Layout ======================================
-static void doLayout(int W, int H) {
-    const int pad = 10;
+// Position all controls of the Download tab inside `page` (the inner
+// rect of the tab control returned by TabCtrl_AdjustRect). Coordinates
+// are absolute in the main window's client area, so we offset by
+// page.left / page.top via the `pos` lambda.
+static void layoutDownloadTab(const RECT& page) {
+    const int pad  = 10;
     const int rowH = 26;
+    const int pageW = page.right - page.left;
+    const int pageH = page.bottom - page.top;
+
+    auto pos = [&](HWND h, int x, int y, int w, int hh) {
+        SetWindowPos(h, nullptr, page.left + x, page.top + y, w, hh, SWP_NOZORDER);
+    };
+
     int x = pad, y = pad;
 
-    // Row 1: URL row
     int labelW = 110, comboW = 130, scanW = 100;
-    int urlW = W - pad - x - labelW - 60 - comboW - scanW - pad * 4;
-    SetWindowPos(GetDlgItem(g_hWnd, 1001), nullptr, x, y + 4, labelW, rowH - 4, SWP_NOZORDER);
+    int urlW = pageW - pad - x - labelW - 60 - comboW - scanW - pad * 4;
+    pos(GetDlgItem(g_hWnd, 1001), x, y + 4, labelW, rowH - 4);
     int xx = x + labelW + 4;
-    SetWindowPos(g_hUrl,  nullptr, xx, y, urlW, rowH, SWP_NOZORDER);
+    pos(g_hUrl, xx, y, urlW, rowH);
     xx += urlW + 8;
-    SetWindowPos(GetDlgItem(g_hWnd, 1002), nullptr, xx, y + 4, 50, rowH - 4, SWP_NOZORDER);
+    pos(GetDlgItem(g_hWnd, 1002), xx, y + 4, 50, rowH - 4);
     xx += 50 + 4;
-    SetWindowPos(g_hType, nullptr, xx, y, comboW, 200, SWP_NOZORDER);
+    pos(g_hType, xx, y, comboW, 200);
     xx += comboW + 8;
-    SetWindowPos(g_hScan, nullptr, xx, y, scanW, rowH, SWP_NOZORDER);
+    pos(g_hScan, xx, y, scanW, rowH);
     y += rowH + pad;
 
-    // Row 2: list toolbar
     int btnW = 110;
-    SetWindowPos(g_hSelAll,  nullptr, x,                y, btnW, rowH, SWP_NOZORDER);
-    SetWindowPos(g_hSelNone, nullptr, x + (btnW + 6),   y, btnW, rowH, SWP_NOZORDER);
-    SetWindowPos(g_hInvert,  nullptr, x + (btnW + 6)*2, y, 130,  rowH, SWP_NOZORDER);
-    SetWindowPos(g_hCount,   nullptr, W - 200 - pad,    y + 4, 200, rowH - 4, SWP_NOZORDER);
+    pos(g_hSelAll,  x,                y, btnW, rowH);
+    pos(g_hSelNone, x + (btnW + 6),   y, btnW, rowH);
+    pos(g_hInvert,  x + (btnW + 6)*2, y, 130,  rowH);
+    pos(g_hCount,   pageW - 200 - pad, y + 4, 200, rowH - 4);
     y += rowH + 4;
 
-    // Calculate dynamic split
-    int bottomReserve = 240; // for options + buttons + log
-    int listH = H - y - bottomReserve - pad;
+    int bottomReserve = 240;
+    int listH = pageH - y - bottomReserve - pad;
     if (listH < 100) listH = 100;
-    SetWindowPos(g_hList, nullptr, x, y, W - 2 * pad, listH, SWP_NOZORDER);
-    // Auto-size title column
-    ListView_SetColumnWidth(g_hList, 2, W - 2 * pad - 60 - 80 - 30);
+    pos(g_hList, x, y, pageW - 2 * pad, listH);
+    ListView_SetColumnWidth(g_hList, 2, pageW - 2 * pad - 60 - 80 - 30);
     y += listH + pad;
 
-    // Options group: mode radios + comboboxes
-    SetWindowPos(g_hVideoRadio, nullptr, x,        y + 4, 160, rowH - 4, SWP_NOZORDER);
-    SetWindowPos(g_hAudioRadio, nullptr, x + 170,  y + 4, 160, rowH - 4, SWP_NOZORDER);
+    pos(g_hVideoRadio, x,        y + 4, 160, rowH - 4);
+    pos(g_hAudioRadio, x + 170,  y + 4, 160, rowH - 4);
     y += rowH;
 
-    SetWindowPos(GetDlgItem(g_hWnd, 1003), nullptr, x,        y + 4, 90, rowH - 4, SWP_NOZORDER);
-    SetWindowPos(g_hVideoQuality, nullptr, x + 95, y, 170, 200, SWP_NOZORDER);
-    SetWindowPos(GetDlgItem(g_hWnd, 1004), nullptr, x + 280, y + 4, 80, rowH - 4, SWP_NOZORDER);
-    SetWindowPos(g_hContainer,   nullptr, x + 360,  y, 110, 200, SWP_NOZORDER);
-    SetWindowPos(GetDlgItem(g_hWnd, 1005), nullptr, x + 490, y + 4, 90, rowH - 4, SWP_NOZORDER);
-    SetWindowPos(g_hAudioFormat, nullptr, x + 580,  y, 110, 200, SWP_NOZORDER);
-    SetWindowPos(GetDlgItem(g_hWnd, 1006), nullptr, x + 700, y + 4, 90, rowH - 4, SWP_NOZORDER);
-    SetWindowPos(g_hAudioQuality,nullptr, x + 790,  y, 130, 200, SWP_NOZORDER);
+    pos(GetDlgItem(g_hWnd, 1003), x,        y + 4, 90, rowH - 4);
+    pos(g_hVideoQuality, x + 95, y, 170, 200);
+    pos(GetDlgItem(g_hWnd, 1004), x + 280, y + 4, 80, rowH - 4);
+    pos(g_hContainer,    x + 360, y, 110, 200);
+    pos(GetDlgItem(g_hWnd, 1005), x + 490, y + 4, 90, rowH - 4);
+    pos(g_hAudioFormat,  x + 580, y, 110, 200);
+    pos(GetDlgItem(g_hWnd, 1006), x + 700, y + 4, 90, rowH - 4);
+    pos(g_hAudioQuality, x + 790, y, 130, 200);
     y += rowH + 6;
 
-    // Output folder row
-    SetWindowPos(GetDlgItem(g_hWnd, 1007), nullptr, x,       y + 4, 100, rowH - 4, SWP_NOZORDER);
+    pos(GetDlgItem(g_hWnd, 1007), x, y + 4, 100, rowH - 4);
     int browseW = 90;
-    int outW = W - 2 * pad - 100 - browseW - 10;
-    SetWindowPos(g_hOutput, nullptr, x + 100, y, outW, rowH, SWP_NOZORDER);
-    SetWindowPos(g_hBrowse, nullptr, x + 100 + outW + 6, y, browseW, rowH, SWP_NOZORDER);
+    int outW = pageW - 2 * pad - 100 - browseW - 10;
+    pos(g_hOutput, x + 100, y, outW, rowH);
+    pos(g_hBrowse, x + 100 + outW + 6, y, browseW, rowH);
     y += rowH + 6;
 
-    // Download / cancel / progress
-    SetWindowPos(g_hDownload, nullptr, x,           y, 160, rowH, SWP_NOZORDER);
-    SetWindowPos(g_hCancel,   nullptr, x + 170,     y, 100, rowH, SWP_NOZORDER);
-    SetWindowPos(g_hProgress, nullptr, x + 280,     y + 2, W - x - 280 - pad, rowH - 4, SWP_NOZORDER);
+    pos(g_hDownload, x,       y, 160, rowH);
+    pos(g_hCancel,   x + 170, y, 100, rowH);
+    pos(g_hProgress, x + 280, y + 2, pageW - x - 280 - pad, rowH - 4);
     y += rowH + 6;
 
-    // Log
-    int logH = H - y - pad;
+    int logH = pageH - y - pad;
     if (logH < 60) logH = 60;
-    SetWindowPos(g_hLog, nullptr, x, y, W - 2 * pad, logH, SWP_NOZORDER);
+    pos(g_hLog, x, y, pageW - 2 * pad, logH);
+}
+
+static void doLayout(int W, int H) {
+    if (!g_hTabs) return;
+    SetWindowPos(g_hTabs, nullptr, 0, 0, W, H, SWP_NOZORDER);
+    RECT page = { 0, 0, W, H };
+    TabCtrl_AdjustRect(g_hTabs, FALSE, &page);
+    if (g_currentTab == 0) layoutDownloadTab(page);
+    else                   UploadPage::layout(page);
 }
 
 // ============================== Button handlers =============================
@@ -260,10 +298,16 @@ static void onSelectNone();
 static void onInvert();
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    // Forward upload-tab WM_APP messages to the upload page module.
+    if (msg >= UploadPage::WM_APP_BEGIN && msg < UploadPage::WM_APP_END) {
+        if (UploadPage::onAppMessage(msg, wp, lp)) return 0;
+    }
+
     switch (msg) {
     case WM_COMMAND: {
         int id = LOWORD(wp);
         int code = HIWORD(wp);
+        if (UploadPage::onCommand(hwnd, id, code)) return 0;
         switch (id) {
         case ID_SCAN_BUTTON:    onScanClicked();    break;
         case ID_DOWNLOAD:       onDownloadClicked();break;
@@ -280,7 +324,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             PostMessage(hwnd, WM_CLOSE, 0, 0);
             break;
         case IDM_TOOLS_TIKTOK:
-            if (!g_busy.load()) showTikTokSettingsDialog(hwnd);
+            if (!g_busy.load()) {
+                showTikTokSettingsDialog(hwnd);
+                UploadPage::refreshAccountStatus();
+            }
             break;
         case IDM_HELP_ABOUT:
             MessageBoxW(hwnd,
@@ -295,6 +342,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_NOTIFY: {
         LPNMHDR n = (LPNMHDR)lp;
+        if (n->hwndFrom == g_hTabs && n->code == TCN_SELCHANGE) {
+            showTab(TabCtrl_GetCurSel(g_hTabs));
+            return 0;
+        }
         if (n->hwndFrom == g_hList && n->code == LVN_ITEMCHANGED) {
             NMLISTVIEW *lv = (NMLISTVIEW*)lp;
             if (lv->uChanged & LVIF_STATE) {
@@ -373,6 +424,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_DESTROY:
         if (g_workerThread.joinable()) g_workerThread.join();
+        UploadPage::onShutdown();
         drainQueuedAppPayloads(hwnd);
         PostQuitMessage(0);
         return 0;
@@ -549,6 +601,24 @@ static HWND createMainWindow() {
 
     auto setFont = [](HWND h){ SendMessageW(h, WM_SETFONT, (WPARAM)g_hFont, TRUE); };
 
+    // Tab control owns the rest of the client area. Download tab holds
+    // the existing scan/queue/options/log; Upload tab holds the TikTok
+    // file list and uploader. Both sets of controls are children of the
+    // main window — we just toggle visibility on TCN_SELCHANGE rather
+    // than reparenting.
+    g_hTabs = CreateWindowExW(0, WC_TABCONTROLW, nullptr,
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP,
+        0, 0, 100, 30, hwnd, (HMENU)(INT_PTR)ID_TAB_CTRL, g_hInstance, nullptr);
+    setFont(g_hTabs);
+    {
+        TCITEMW ti{};
+        ti.mask = TCIF_TEXT;
+        ti.pszText = (LPWSTR)L"Download";
+        TabCtrl_InsertItem(g_hTabs, 0, &ti);
+        ti.pszText = (LPWSTR)L"Upload";
+        TabCtrl_InsertItem(g_hTabs, 1, &ti);
+    }
+
     HWND lblUrl = mkLabel(hwnd, 1001, L"YouTube channel URL:");
     g_hUrl  = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
@@ -681,6 +751,15 @@ static HWND createMainWindow() {
     };
     for (HWND h : children) if (h) setFont(h);
 
+    // Track all download-tab controls so showTab() can hide them when
+    // the user switches to the Upload tab.
+    for (HWND h : children) if (h) g_dlControls.push_back(h);
+
+    // Build the Upload tab's controls (initially hidden — they're
+    // created without WS_VISIBLE). We track them in g_upControls so
+    // showTab() can show them.
+    g_upControls = UploadPage::createControls(hwnd, g_hFont);
+
     updateModeUi();
     updateCountLabel();
 
@@ -700,7 +779,8 @@ int runApp(HINSTANCE hInst, int nCmdShow) {
 
     INITCOMMONCONTROLSEX icc{};
     icc.dwSize = sizeof(icc);
-    icc.dwICC  = ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES;
+    icc.dwICC  = ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS |
+                 ICC_STANDARD_CLASSES | ICC_TAB_CLASSES;
     InitCommonControlsEx(&icc);
     OleInitialize(nullptr);
 
