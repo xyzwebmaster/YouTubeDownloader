@@ -1,10 +1,11 @@
 // YouTube Bulk Downloader - Win32 GUI front-end for yt-dlp.
 //
 // Build (MinGW):
+//   windres app.rc -O coff -o app.rc.o
 //   g++ -O2 -static -mwindows -DUNICODE -D_UNICODE -o YouTubeDownloader.exe
 //       main.cpp app.cpp download.cpp process.cpp util.cpp
 //       http.cpp json.cpp settings.cpp oauth.cpp tiktok_dialog.cpp
-//       upload_tiktok.cpp upload_page.cpp
+//       upload_tiktok.cpp upload_page.cpp app.rc.o
 //       -lcomctl32 -lcomdlg32 -lshell32 -lole32 -luuid
 //       -lwinhttp -lcrypt32 -lbcrypt -lws2_32
 

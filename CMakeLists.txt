@@ -4,6 +4,8 @@ project(YouTubeDownloader LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+enable_language(RC)
+
 add_executable(YouTubeDownloader WIN32
     main.cpp
     app.cpp
@@ -17,6 +19,7 @@ add_executable(YouTubeDownloader WIN32
     tiktok_dialog.cpp
     upload_tiktok.cpp
     upload_page.cpp
+    app.rc
 )
 
 target_compile_definitions(YouTubeDownloader PRIVATE

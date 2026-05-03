@@ -191,17 +191,22 @@ static void drainQueuedAppPayloads(HWND hwnd) {
 
 // Switch the visible tab and re-layout. Called from WM_NOTIFY/TCN_SELCHANGE
 // and once at startup to position whichever tab opens by default.
+//
+// Order matters: hide everything first, then position the now-active set,
+// then show. Showing controls *before* positioning would briefly flash
+// them at their last position (or 0,0 if never positioned), which looks
+// like a UI bug to the user.
 static void doLayout(int W, int H);
 static void showTab(int t) {
-    int dlMode = (t == 0) ? SW_SHOW : SW_HIDE;
-    int upMode = (t == 1) ? SW_SHOW : SW_HIDE;
-    for (HWND h : g_dlControls) ShowWindow(h, dlMode);
-    for (HWND h : g_upControls) ShowWindow(h, upMode);
     g_currentTab = t;
-    if (t == 1) UploadPage::onShow();
+    for (HWND h : g_dlControls) ShowWindow(h, SW_HIDE);
+    for (HWND h : g_upControls) ShowWindow(h, SW_HIDE);
     RECT rc;
     GetClientRect(g_hWnd, &rc);
     doLayout(rc.right, rc.bottom);
+    auto& active = (t == 0) ? g_dlControls : g_upControls;
+    for (HWND h : active) ShowWindow(h, SW_SHOW);
+    if (t == 1) UploadPage::onShow();
 }
 
 // ============================== Layout ======================================
@@ -792,6 +797,9 @@ int runApp(HINSTANCE hInst, int nCmdShow) {
     HWND hwnd = createMainWindow();
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
+    // Focus the URL field so the user can paste a channel and Tab into
+    // the rest of the form without an extra mouse click.
+    SetFocus(g_hUrl);
 
     appendLogToCtrl(L"YouTube Bulk Downloader.");
     appendLogToCtrl(L"This is a GUI front-end for yt-dlp.");

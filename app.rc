@@ -1,0 +1,7 @@
+// Bind app.manifest as the executable's manifest resource.
+// Resource id 1, type 24 (RT_MANIFEST). Without this, MinGW builds fall
+// back to comctl32 v5 — controls render in the Windows 95 / Classic
+// theme. The MSVC #pragma comment(linker, "/manifestdependency:...") in
+// app.cpp accomplishes the same thing for MSVC builds, but MinGW ignores
+// linker pragmas, so we need a real .rc file.
+1 24 "app.manifest"
