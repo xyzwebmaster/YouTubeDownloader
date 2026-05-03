@@ -1,0 +1,21 @@
+# Build artifacts
+build/
+*.exe
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
