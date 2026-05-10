@@ -50,6 +50,7 @@ def emit(d: dict) -> None:
 
 
 try:
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
 except ImportError:
     emit({
@@ -88,13 +89,42 @@ def open_context(p, *, headless: bool):
     )
 
 
+def _setup_page(ctx):
+    try:
+        if ctx.pages:
+            return ctx.pages[0]
+    except Exception:
+        pass
+    return ctx.new_page()
+
+
+def _wait_for_setup_close(ctx, page) -> None:
+    """Return when the user closes the setup tab/window."""
+    while True:
+        try:
+            page.wait_for_event("close", timeout=1000)
+            return
+        except PlaywrightTimeoutError:
+            pass
+        except Exception:
+            return
+
+        try:
+            if page.is_closed():
+                return
+            if not [p for p in ctx.pages if not p.is_closed()]:
+                return
+        except Exception:
+            return
+
+
 def cmd_setup(args) -> int:
     """Open visible browser, navigate to login, wait for the user to
     close the window. Anything they do (login, captcha) persists in
     PROFILE_DIR for subsequent `upload` calls."""
     with sync_playwright() as p:
         ctx = open_context(p, headless=False)
-        page = ctx.new_page()
+        page = _setup_page(ctx)
         try:
             page.goto("https://www.tiktok.com/login", timeout=60000)
         except Exception as e:
@@ -107,14 +137,12 @@ def cmd_setup(args) -> int:
         # Just wait until the user closes the only page (or the whole
         # context). We don't auto-detect login completion because the
         # user might want to verify their settings before closing.
-        while True:
-            time.sleep(1)
-            try:
-                if not ctx.pages:
-                    break
-            except Exception:
-                break
+        _wait_for_setup_close(ctx, page)
         emit({"ok": True, "stage": "done"})
+        try:
+            ctx.close()
+        except Exception:
+            pass
     return 0
 
 

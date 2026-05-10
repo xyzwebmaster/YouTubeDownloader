@@ -161,6 +161,7 @@ UploadResult runSetup(const LogFn& log, const std::atomic<bool>& cancel) {
             log(L"[browser] " + s2w(j["msg"].asStr()));
         } else if (j["stage"].asStr() == "done" && j["ok"].asBool()) {
             gotDone = true;
+            log(L"[browser] setup done; session saved");
         } else {
             log(line);
         }
@@ -190,6 +191,7 @@ UploadResult runInstagramSetup(const LogFn& log, const std::atomic<bool>& cancel
             log(L"[instagram] " + s2w(j["msg"].asStr()));
         } else if (j["stage"].asStr() == "done" && j["ok"].asBool()) {
             gotDone = true;
+            log(L"[instagram] setup done; session saved");
         } else {
             log(line);
         }

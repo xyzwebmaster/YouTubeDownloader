@@ -551,6 +551,12 @@ void onBrowserSetup() {
         UploadBrowser::UploadResult r = instagramMode
             ? UploadBrowser::runInstagramSetup(logFn, g_cancelRequested)
             : UploadBrowser::runSetup(logFn, g_cancelRequested);
+        if (r.success) {
+            Settings::set(instagramMode ? "instagram.browser_setup"
+                                        : "tiktok.browser_setup",
+                          "done");
+            Settings::save();
+        }
         auto* d = new DonePayload{g_cancelRequested.load(), 1, r.success ? 1 : 0};
         if (!r.success && !r.error.empty()) {
             auto* lp = new LogPayload{
@@ -834,6 +840,7 @@ bool onAppMessage(UINT msg, WPARAM /*wp*/, LPARAM lp) {
                       std::to_wstring(p->succeeded) + L"/" +
                       std::to_wstring(p->total) + L" basarili.");
         setBusyUi(false);
+        refreshAccountStatus();
         delete p;
         return true;
     }
@@ -862,11 +869,17 @@ void refreshAccountStatus() {
     if (!hStatus) return;
     UploadMode mode = currentMode();
     if (mode == UploadMode::InstagramBrowser) {
-        SetWindowTextW(hStatus, L"Instagram Reels: Browser setup ile giris yap");
+        SetWindowTextW(hStatus,
+            Settings::get("instagram.browser_setup") == "done"
+                ? L"Instagram Reels: giris kaydedildi"
+                : L"Instagram Reels: Browser setup ile giris yap");
         return;
     }
     if (mode == UploadMode::TikTokBrowser) {
-        SetWindowTextW(hStatus, L"TikTok Browser: Browser setup ile giris yap");
+        SetWindowTextW(hStatus,
+            Settings::get("tiktok.browser_setup") == "done"
+                ? L"TikTok Browser: giris kaydedildi"
+                : L"TikTok Browser: Browser setup ile giris yap");
         return;
     }
 
