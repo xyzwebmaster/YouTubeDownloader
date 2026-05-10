@@ -38,6 +38,12 @@ import traceback
 from pathlib import Path
 
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
 def emit(d: dict) -> None:
     """One JSON line per stdout write — that's how the C++ host reads us."""
     print(json.dumps(d, ensure_ascii=False), flush=True)
@@ -159,28 +165,113 @@ def _fill_caption(page, text: str) -> None:
             return
 
 
-def _click_post(page) -> bool:
-    """Click whichever variant of the Post button is currently in the DOM.
+POST_BUTTON_TIMEOUT_MS = 300000
+POST_BUTTON_MARK = "data-ytdl-post-target"
+POST_BUTTON_SELECTOR_MARK = "data-ytdl-post-selector"
+POST_BUTTON_SELECTORS = [
+    "[data-e2e='post_video_button']",
+    "[data-e2e='post-button']",
+    "[data-e2e='post_button']",
+    "[data-testid='post_video_button']",
+    "[data-testid='post-button']",
+    "[data-testid='post_button']",
+]
 
-    TikTok's button has been data-e2e='post_video_button' and
-    'post-button' over time; localizations also change the visible
-    text. Returns True if a click happened.
+
+def _click_post(page):
+    """Wait for TikTok's publish control to be actionable, then click it.
+
+    The upload page is localized, so visible button labels are a poor
+    contract. Prefer stable data hooks and explicit enabled/visible
+    checks instead.
     """
-    candidates = [
-        "button[data-e2e='post_video_button']:not([disabled])",
-        "button[data-e2e='post-button']:not([disabled])",
-        "button:has-text('Post'):not([disabled])",
-        "button:has-text('Yayinla'):not([disabled])",
-        "button:has-text('Yayınla'):not([disabled])",
-    ]
-    for sel in candidates:
-        try:
-            page.wait_for_selector(sel, timeout=300000)
-            page.click(sel)
-            return True
-        except Exception:
-            continue
-    return False
+    page.wait_for_function(
+        """
+        ({ selectors, targetMark, selectorMark }) => {
+            const seen = new Set();
+
+            const asClickable = (node) => {
+                if (!(node instanceof Element)) return null;
+                if (node.matches("button,[role='button']")) return node;
+                return node.closest("button,[role='button']") ||
+                    node.querySelector("button,[role='button']") ||
+                    node;
+            };
+
+            const isUsable = (el) => {
+                if (!(el instanceof HTMLElement)) return false;
+                const rect = el.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) return false;
+
+                const style = window.getComputedStyle(el);
+                if (style.display === "none" ||
+                    style.visibility === "hidden" ||
+                    style.pointerEvents === "none") {
+                    return false;
+                }
+
+                if (el.matches(":disabled") ||
+                    el.getAttribute("aria-disabled") === "true" ||
+                    el.getAttribute("data-disabled") === "true" ||
+                    el.closest("[aria-disabled='true']")) {
+                    return false;
+                }
+                return true;
+            };
+
+            document
+                .querySelectorAll("[" + targetMark + "='1']")
+                .forEach((el) => {
+                    el.removeAttribute(targetMark);
+                    el.removeAttribute(selectorMark);
+                });
+
+            for (const selector of selectors) {
+                for (const node of document.querySelectorAll(selector)) {
+                    const button = asClickable(node);
+                    if (!button || seen.has(button)) continue;
+                    seen.add(button);
+                    if (!isUsable(button)) continue;
+
+                    button.setAttribute(targetMark, "1");
+                    button.setAttribute(selectorMark, selector);
+                    return true;
+                }
+            }
+            return false;
+        }
+        """,
+        {
+            "selectors": POST_BUTTON_SELECTORS,
+            "targetMark": POST_BUTTON_MARK,
+            "selectorMark": POST_BUTTON_SELECTOR_MARK,
+        },
+        timeout=POST_BUTTON_TIMEOUT_MS,
+    )
+
+    button = page.locator(f"[{POST_BUTTON_MARK}='1']").first
+    selector = button.get_attribute(POST_BUTTON_SELECTOR_MARK) or "data hook"
+    button.scroll_into_view_if_needed(timeout=10000)
+    button.click(timeout=10000)
+    return selector
+
+
+def _wait_for_post_success(page) -> bool:
+    """Wait for a language-neutral success signal after publish."""
+    try:
+        page.wait_for_url("**/tiktokstudio/content**", timeout=180000)
+        return True
+    except Exception:
+        pass
+
+    try:
+        page.wait_for_function(
+            "() => location.pathname.includes('/tiktokstudio/content')",
+            timeout=20000,
+        )
+        return True
+    except Exception:
+        return False
 
 
 def cmd_upload(args) -> int:
@@ -209,31 +300,22 @@ def cmd_upload(args) -> int:
                 _fill_caption(page, args.caption)
 
             emit({"stage": "ready"})
-            if not _click_post(page):
+            try:
+                post_selector = _click_post(page)
+            except Exception as e:
                 emit({"ok": False, "error":
-                      "Post butonu bulunamadi / aktiflesmedi"})
+                      f"Post butonu bulunamadi / aktiflesmedi: {e}"})
                 return 1
+            emit({"stage": "post_clicked", "selector": post_selector})
 
             # Success indicator: TikTok redirects to the content list
-            # once the post is queued. As a fallback, look for a toast.
-            try:
-                page.wait_for_url("**/tiktokstudio/content**", timeout=180000)
+            # once the post is queued. This stays stable across locales.
+            if _wait_for_post_success(page):
                 emit({"ok": True, "stage": "posted"})
                 return 0
-            except Exception:
-                pass
-            try:
-                page.wait_for_selector(
-                    "text=/posted|yayınlan|video uploaded/i",
-                    timeout=20000,
-                )
-                emit({"ok": True, "stage": "posted"})
-                return 0
-            except Exception as e:
-                emit({"ok": False, "stage": "post-wait",
-                      "error":
-                      f"3 dk icinde basari onayi alinamadi: {e}"})
-                return 1
+            emit({"ok": False, "stage": "post-wait",
+                  "error": "3 dk icinde basari onayi alinamadi"})
+            return 1
         except Exception as e:
             emit({"ok": False, "error": str(e),
                   "trace": traceback.format_exc().splitlines()[-3:]})

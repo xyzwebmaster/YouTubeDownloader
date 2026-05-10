@@ -29,6 +29,7 @@ enum : int {
     ID_UP_BROWSER_SETUP,
     ID_UP_MODE_API,
     ID_UP_MODE_BROWSER,
+    ID_UP_MODE_INSTAGRAM,
     ID_UP_CAPTION_LBL,
     ID_UP_CAPTION,
     ID_UP_LIST,
@@ -62,7 +63,7 @@ struct UploadFile {
 };
 
 HWND hStatus = nullptr, hSettings = nullptr, hBrowserSetup = nullptr;
-HWND hModeApi = nullptr, hModeBrowser = nullptr;
+HWND hModeApi = nullptr, hModeBrowser = nullptr, hModeInstagram = nullptr;
 HWND hCaptionLbl = nullptr, hCaption = nullptr;
 HWND hList = nullptr;
 HWND hAdd = nullptr, hRemove = nullptr, hClear = nullptr, hAddFolder = nullptr;
@@ -72,13 +73,22 @@ HWND hProgress = nullptr, hLog = nullptr;
 std::vector<UploadFile> g_files;
 std::thread             g_thread;
 
-enum class UploadMode { Api, Browser };
+enum class UploadMode { Api, TikTokBrowser, InstagramBrowser };
 UploadMode currentMode() {
+    std::string mode = Settings::get("upload.mode");
+    if (mode == "instagram") return UploadMode::InstagramBrowser;
+    if (mode == "tiktok_browser") return UploadMode::TikTokBrowser;
+    if (mode == "tiktok_api") return UploadMode::Api;
+
     return Settings::get("tiktok.upload_mode") == "browser"
-        ? UploadMode::Browser : UploadMode::Api;
+        ? UploadMode::TikTokBrowser : UploadMode::Api;
 }
 void saveMode(UploadMode m) {
-    Settings::set("tiktok.upload_mode", m == UploadMode::Browser ? "browser" : "api");
+    const char* mode = "tiktok_api";
+    if (m == UploadMode::TikTokBrowser) mode = "tiktok_browser";
+    if (m == UploadMode::InstagramBrowser) mode = "instagram";
+    Settings::set("upload.mode", mode);
+    Settings::set("tiktok.upload_mode", m == UploadMode::TikTokBrowser ? "browser" : "api");
     Settings::save();
 }
 
@@ -93,11 +103,29 @@ std::wstring formatSize(long long n) {
     return buf;
 }
 
+std::wstring fileTitle(const std::wstring& path) {
+    size_t slash = path.find_last_of(L"\\/");
+    std::wstring name = (slash == std::wstring::npos)
+        ? path : path.substr(slash + 1);
+    size_t dot = name.find_last_of(L'.');
+    if (dot != std::wstring::npos && dot > 0) name.resize(dot);
+    return name;
+}
+
+std::wstring composeInstagramCaption(const std::wstring& path,
+                                     const std::wstring& description) {
+    std::wstring title = trim(fileTitle(path));
+    std::wstring desc = trim(description);
+    if (title.empty()) return desc;
+    if (desc.empty()) return title;
+    return title + L"\r\n\r\n" + desc;
+}
+
 const wchar_t* statusName(int s) {
     switch (s) {
     case 0: return L"Pending";
     case 1: return L"Uploading";
-    case 2: return L"Done (draft)";
+    case 2: return L"Done";
     case 3: return L"Failed";
     default: return L"";
     }
@@ -321,17 +349,55 @@ void browserUploadWorker(std::vector<int> queue, std::wstring caption) {
     PostMessageW(g_hWnd, MSG_DONE, 0, (LPARAM)d);
 }
 
+void instagramUploadWorker(std::vector<int> queue, std::wstring description) {
+    int total = (int)queue.size();
+    int ok = 0;
+    for (int i = 0; i < total; ++i) {
+        if (g_cancelRequested.load()) break;
+        int row = queue[i];
+        if (row < 0 || row >= (int)g_files.size()) continue;
+
+        {
+            auto* p = new FileStatusPayload{row, 1, L"", ""};
+            PostMessageW(g_hWnd, MSG_FILE_STATUS, 0, (LPARAM)p);
+        }
+
+        std::wstring caption = composeInstagramCaption(g_files[row].path, description);
+        UploadBrowser::UploadResult r = UploadBrowser::uploadInstagramOne(
+            g_files[row].path,
+            caption,
+            [](const std::wstring& line) {
+                auto* p = new LogPayload{line};
+                PostMessageW(g_hWnd, MSG_LOG, 0, (LPARAM)p);
+            },
+            [](const std::wstring& /*stage*/) {},
+            g_cancelRequested);
+
+        auto* fs = new FileStatusPayload{
+            row, r.success ? 2 : 3, r.error, ""
+        };
+        PostMessageW(g_hWnd, MSG_FILE_STATUS, 0, (LPARAM)fs);
+        if (r.success) ++ok;
+    }
+    auto* d = new DonePayload{g_cancelRequested.load(), total, ok};
+    PostMessageW(g_hWnd, MSG_DONE, 0, (LPARAM)d);
+}
+
 void setBusyUi(bool busy) {
+    UploadMode mode = currentMode();
+    bool browserMode = mode != UploadMode::Api;
     EnableWindow(hUpload,       !busy);
     EnableWindow(hAdd,          !busy);
     EnableWindow(hRemove,       !busy);
     EnableWindow(hClear,        !busy);
     EnableWindow(hAddFolder,    !busy);
-    EnableWindow(hSettings,     !busy);
-    EnableWindow(hBrowserSetup, !busy);
+    EnableWindow(hSettings,     !busy && mode == UploadMode::Api);
+    EnableWindow(hBrowserSetup, !busy && browserMode);
     EnableWindow(hModeApi,      !busy);
     EnableWindow(hModeBrowser,  !busy);
-    EnableWindow(hCaption,      !busy);
+    EnableWindow(hModeInstagram, !busy);
+    EnableWindow(hCaption,      !busy && browserMode);
+    EnableWindow(hCaptionLbl,   !busy && browserMode);
     EnableWindow(hCancel,        busy);
 }
 
@@ -403,8 +469,11 @@ void onUpload() {
         return;
     }
 
-    // Browser mode.
-    if (!UploadBrowser::isPythonAvailable()) {
+    bool instagramMode = mode == UploadMode::InstagramBrowser;
+    bool helperReady = instagramMode
+        ? UploadBrowser::isInstagramAvailable()
+        : UploadBrowser::isPythonAvailable();
+    if (!helperReady) {
         MessageBoxW(g_hWnd,
             L"Browser modu Python + Playwright gerektirir.\n\n"
             L"Bir terminalde:\n"
@@ -421,25 +490,44 @@ void onUpload() {
         return;
     }
 
-    wchar_t capBuf[2048] = {0};
-    GetWindowTextW(hCaption, capBuf, 2048);
-    std::wstring caption = capBuf;
+    int capLen = GetWindowTextLengthW(hCaption);
+    std::wstring caption;
+    if (capLen > 0) {
+        std::vector<wchar_t> capBuf((size_t)capLen + 1, L'\0');
+        GetWindowTextW(hCaption, capBuf.data(), capLen + 1);
+        caption.assign(capBuf.data());
+    }
 
     SendMessage(hProgress, PBM_SETRANGE32, 0, 1000);
     SendMessage(hProgress, PBM_SETPOS,     0, 500);   // indeterminate-ish
-    appendLog(L"[upload] Browser modu, " + std::to_wstring(queue.size()) + L" dosya");
-    appendLog(L"[upload] DIKKAT: TikTok otomasyonu hesap banina yol acabilir.");
+    appendLog((instagramMode ? L"[upload] Instagram Reels Browser modu, "
+                              : L"[upload] TikTok Browser modu, ")
+              + std::to_wstring(queue.size()) + L" dosya");
+    appendLog(instagramMode
+        ? L"[upload] Instagram Reels caption = dosya basligi + aciklama alani."
+        : L"[upload] DIKKAT: TikTok otomasyonu hesap banina yol acabilir.");
 
     g_cancelRequested.store(false);
     g_busy.store(true);
     setBusyUi(true);
     if (g_thread.joinable()) g_thread.join();
-    g_thread = std::thread(browserUploadWorker, std::move(queue), caption);
+    if (instagramMode) {
+        g_thread = std::thread(instagramUploadWorker, std::move(queue), caption);
+    } else {
+        g_thread = std::thread(browserUploadWorker, std::move(queue), caption);
+    }
 }
 
 void onBrowserSetup() {
     if (g_busy.load()) return;
-    if (!UploadBrowser::isPythonAvailable()) {
+    UploadMode mode = currentMode();
+    bool instagramMode = mode == UploadMode::InstagramBrowser;
+    if (mode == UploadMode::Api) return;
+
+    bool helperReady = instagramMode
+        ? UploadBrowser::isInstagramAvailable()
+        : UploadBrowser::isPythonAvailable();
+    if (!helperReady) {
         MessageBoxW(g_hWnd,
             L"Python + Playwright gerekli.\n\n"
             L"Bir terminalde:\n"
@@ -448,21 +536,27 @@ void onBrowserSetup() {
             L"Python yok", MB_OK | MB_ICONWARNING);
         return;
     }
-    appendLog(L"[browser] setup baslatildi — acilan pencereye giris yap");
+    appendLog(instagramMode
+        ? L"[instagram] setup baslatildi - acilan pencereye giris yap"
+        : L"[browser] setup baslatildi - acilan pencereye giris yap");
     g_cancelRequested.store(false);
     g_busy.store(true);
     setBusyUi(true);
     if (g_thread.joinable()) g_thread.join();
-    g_thread = std::thread([]() {
-        UploadBrowser::UploadResult r = UploadBrowser::runSetup(
-            [](const std::wstring& line) {
-                auto* p = new LogPayload{line};
-                PostMessageW(g_hWnd, MSG_LOG, 0, (LPARAM)p);
-            },
-            g_cancelRequested);
+    g_thread = std::thread([instagramMode]() {
+        auto logFn = [](const std::wstring& line) {
+            auto* p = new LogPayload{line};
+            PostMessageW(g_hWnd, MSG_LOG, 0, (LPARAM)p);
+        };
+        UploadBrowser::UploadResult r = instagramMode
+            ? UploadBrowser::runInstagramSetup(logFn, g_cancelRequested)
+            : UploadBrowser::runSetup(logFn, g_cancelRequested);
         auto* d = new DonePayload{g_cancelRequested.load(), 1, r.success ? 1 : 0};
         if (!r.success && !r.error.empty()) {
-            auto* lp = new LogPayload{L"[browser] setup failed: " + r.error};
+            auto* lp = new LogPayload{
+                (instagramMode ? L"[instagram] setup failed: "
+                               : L"[browser] setup failed: ") + r.error
+            };
             PostMessageW(g_hWnd, MSG_LOG, 0, (LPARAM)lp);
         }
         PostMessageW(g_hWnd, MSG_DONE, 0, (LPARAM)d);
@@ -471,14 +565,28 @@ void onBrowserSetup() {
 
 void applyModeUi() {
     UploadMode m = currentMode();
-    SendMessage(hModeApi,     BM_SETCHECK, m == UploadMode::Api     ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessage(hModeBrowser, BM_SETCHECK, m == UploadMode::Browser ? BST_CHECKED : BST_UNCHECKED, 0);
-    bool browser = (m == UploadMode::Browser);
-    EnableWindow(hCaption,      browser);
-    EnableWindow(hCaptionLbl,   browser);
-    EnableWindow(hBrowserSetup, browser);
+    bool busy = g_busy.load();
+    bool browser = (m != UploadMode::Api);
+    SendMessage(hModeApi,       BM_SETCHECK, m == UploadMode::Api              ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessage(hModeBrowser,   BM_SETCHECK, m == UploadMode::TikTokBrowser    ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessage(hModeInstagram, BM_SETCHECK, m == UploadMode::InstagramBrowser ? BST_CHECKED : BST_UNCHECKED, 0);
+    EnableWindow(hCaption,      !busy && browser);
+    EnableWindow(hCaptionLbl,   !busy && browser);
+    EnableWindow(hBrowserSetup, !busy && browser);
+    EnableWindow(hSettings,     !busy && m == UploadMode::Api);
+    SetWindowTextW(hBrowserSetup,
+        m == UploadMode::InstagramBrowser
+            ? L"Instagram setup..."
+            : L"TikTok browser setup...");
+    SetWindowTextW(hCaptionLbl,
+        m == UploadMode::InstagramBrowser
+            ? L"Description:"
+            : L"Caption:");
     SetWindowTextW(hInfo,
-        browser
+        m == UploadMode::InstagramBrowser
+            ? L"Instagram Reels Browser modu: caption dosya basligi + aciklama alanindan olusur. "
+              L"Coklu secimde her video sirayla paylasilir."
+        : m == UploadMode::TikTokBrowser
             ? L"Browser modu: TikTok'a tarayici uzerinden dogrudan post atilir. "
               L"Hesap banı riski var, test hesabiyla dene."
             : L"API / Inbox modu: video TikTok uygulamasinda Drafts'a duser. "
@@ -510,17 +618,22 @@ std::vector<HWND> createControls(HWND parent, HFONT font) {
         WS_CHILD | WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON,
         0, 0, 100, 22, parent, (HMENU)(INT_PTR)ID_UP_MODE_API, hInst, nullptr);
     setFont(hModeApi);
-    hModeBrowser = CreateWindowExW(0, L"BUTTON", L"Browser (live post)",
+    hModeBrowser = CreateWindowExW(0, L"BUTTON", L"TikTok Browser",
         WS_CHILD | WS_TABSTOP | BS_AUTORADIOBUTTON,
         0, 0, 100, 22, parent, (HMENU)(INT_PTR)ID_UP_MODE_BROWSER, hInst, nullptr);
     setFont(hModeBrowser);
+    hModeInstagram = CreateWindowExW(0, L"BUTTON", L"Instagram Reels",
+        WS_CHILD | WS_TABSTOP | BS_AUTORADIOBUTTON,
+        0, 0, 100, 22, parent, (HMENU)(INT_PTR)ID_UP_MODE_INSTAGRAM, hInst, nullptr);
+    setFont(hModeInstagram);
 
-    hCaptionLbl = CreateWindowExW(0, L"STATIC", L"Caption (Browser):",
+    hCaptionLbl = CreateWindowExW(0, L"STATIC", L"Caption:",
         WS_CHILD | SS_LEFT, 0, 0, 100, 22,
         parent, (HMENU)(INT_PTR)ID_UP_CAPTION_LBL, hInst, nullptr);
     setFont(hCaptionLbl);
     hCaption = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-        WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL,
+        WS_CHILD | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE |
+        ES_AUTOVSCROLL | ES_WANTRETURN,
         0, 0, 100, 22, parent, (HMENU)(INT_PTR)ID_UP_CAPTION, hInst, nullptr);
     setFont(hCaption);
 
@@ -581,7 +694,7 @@ std::vector<HWND> createControls(HWND parent, HFONT font) {
     refreshAccountStatus();
     applyModeUi();
 
-    return { hStatus, hSettings, hBrowserSetup, hModeApi, hModeBrowser,
+    return { hStatus, hSettings, hBrowserSetup, hModeApi, hModeBrowser, hModeInstagram,
              hCaptionLbl, hCaption, hList,
              hAdd, hRemove, hClear, hAddFolder,
              hInfo, hUpload, hCancel, hProgress, hLog };
@@ -594,27 +707,30 @@ void layout(const RECT& r) {
     int rowH = 26;
 
     // Top row: status (left) + Settings + Browser-setup buttons (right).
-    int btnSettingsW = 160, btnBrowserW = 150, btnGap = 6;
+    int btnSettingsW = 160, btnBrowserW = 190, btnGap = 6;
     int rightBlock = btnSettingsW + btnGap + btnBrowserW;
     SetWindowPos(hStatus,       nullptr, x, y + 4, W - rightBlock - 8, rowH - 4, SWP_NOZORDER);
     SetWindowPos(hSettings,     nullptr, x + W - rightBlock,                  y, btnSettingsW, rowH, SWP_NOZORDER);
     SetWindowPos(hBrowserSetup, nullptr, x + W - btnBrowserW,                 y, btnBrowserW,  rowH, SWP_NOZORDER);
     y += rowH + 6;
 
-    // Mode row + caption row (mode pinned left, caption fills the rest)
-    SetWindowPos(hModeApi,     nullptr, x,           y + 2, 160, rowH - 4, SWP_NOZORDER);
-    SetWindowPos(hModeBrowser, nullptr, x + 170,     y + 2, 200, rowH - 4, SWP_NOZORDER);
-    y += rowH;
-    SetWindowPos(hCaptionLbl,  nullptr, x,           y + 4, 130, rowH - 4, SWP_NOZORDER);
-    SetWindowPos(hCaption,     nullptr, x + 135,     y, W - 135, rowH, SWP_NOZORDER);
-    y += rowH + 6;
+    // Mode row + description row (mode pinned left, text fills the rest)
+    SetWindowPos(hModeApi,       nullptr, x,       y + 2, 150, rowH - 4, SWP_NOZORDER);
+    SetWindowPos(hModeBrowser,   nullptr, x + 160, y + 2, 170, rowH - 4, SWP_NOZORDER);
+    SetWindowPos(hModeInstagram, nullptr, x + 340, y + 2, 200, rowH - 4, SWP_NOZORDER);
+    y += rowH + 4;
+    int captionH = rowH * 2 + 8;
+    SetWindowPos(hCaptionLbl,    nullptr, x,       y + 4, 130, rowH - 4, SWP_NOZORDER);
+    SetWindowPos(hCaption,       nullptr, x + 135, y, W - 135, captionH, SWP_NOZORDER);
+    y += captionH + 6;
 
     int btnRow    = rowH + 6;
     int infoRow   = 36   + 6;
     int actionRow = rowH + 6;
     int progRow   = 22   + 6;
     int logH      = 120;
-    int listH     = H - btnRow - infoRow - actionRow - progRow - logH - (rowH + 6) - (rowH * 2 + 12);
+    int usedTop   = y - (r.top + 8);
+    int listH     = H - usedTop - btnRow - infoRow - actionRow - progRow - logH;
     if (listH < 80) listH = 80;
     SetWindowPos(hList, nullptr, x, y, W, listH, SWP_NOZORDER);
     ListView_SetColumnWidth(hList, 2, W - 110 - 100 - 30);
@@ -651,10 +767,17 @@ bool onCommand(HWND mainWnd, int id, int /*code*/) {
     case ID_UP_MODE_API:
         saveMode(UploadMode::Api);
         applyModeUi();
+        refreshAccountStatus();
         return true;
     case ID_UP_MODE_BROWSER:
-        saveMode(UploadMode::Browser);
+        saveMode(UploadMode::TikTokBrowser);
         applyModeUi();
+        refreshAccountStatus();
+        return true;
+    case ID_UP_MODE_INSTAGRAM:
+        saveMode(UploadMode::InstagramBrowser);
+        applyModeUi();
+        refreshAccountStatus();
         return true;
     case ID_UP_ADD:        onAdd();           return true;
     case ID_UP_REMOVE:     onRemove();        return true;
@@ -737,6 +860,16 @@ void drainQueuedPayloads(HWND hwnd) {
 
 void refreshAccountStatus() {
     if (!hStatus) return;
+    UploadMode mode = currentMode();
+    if (mode == UploadMode::InstagramBrowser) {
+        SetWindowTextW(hStatus, L"Instagram Reels: Browser setup ile giris yap");
+        return;
+    }
+    if (mode == UploadMode::TikTokBrowser) {
+        SetWindowTextW(hStatus, L"TikTok Browser: Browser setup ile giris yap");
+        return;
+    }
+
     OAuth::Tokens t;
     std::wstring text;
     if (OAuth::loadTokens(t) && OAuth::isTokenValid(t)) {

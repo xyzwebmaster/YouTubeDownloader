@@ -1,5 +1,8 @@
 # Build artifacts
 build/
+dist/
+release/
+__pycache__/
 *.exe
 *.obj
 *.o

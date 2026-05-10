@@ -26,8 +26,8 @@ namespace UploadBrowser {
 
 namespace {
 
-// Locate `tiktok_uploader.py` next to the running .exe. Build/install
-// scripts must place the .py file alongside the .exe.
+// Locate browser-helper scripts next to the running .exe. Build/install
+// scripts must place the .py files alongside the .exe.
 std::wstring exeDir() {
     wchar_t buf[MAX_PATH] = {0};
     DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
@@ -35,6 +35,23 @@ std::wstring exeDir() {
     std::wstring p(buf, n);
     size_t slash = p.find_last_of(L"\\/");
     return (slash == std::wstring::npos) ? L"" : p.substr(0, slash);
+}
+
+std::wstring scriptPathFor(const wchar_t* fileName) {
+    std::wstring d = exeDir();
+    if (d.empty()) return L"";
+    std::vector<std::wstring> candidates = {
+        d + L"\\helpers\\" + fileName,
+        d + L"\\" + fileName,
+    };
+    for (const auto& p : candidates) {
+        DWORD attr = GetFileAttributesW(p.c_str());
+        if (attr != INVALID_FILE_ATTRIBUTES &&
+            !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+            return p;
+        }
+    }
+    return L"";
 }
 
 // Try `python.exe` first, then `py.exe -3`. Both common on Windows.
@@ -53,7 +70,9 @@ std::wstring findPython() {
 // Run the helper with the given subcommand args, dispatching each
 // stdout line to onLine. Returns process exit code, or -1 if the
 // helper couldn't be spawned.
-int runHelper(const std::vector<std::wstring>& extraArgs,
+int runHelper(const std::wstring& script,
+              const wchar_t* scriptName,
+              const std::vector<std::wstring>& extraArgs,
               const std::function<void(const std::wstring&)>& onLine,
               const std::atomic<bool>& cancel) {
     std::wstring py = findPython();
@@ -62,10 +81,9 @@ int runHelper(const std::vector<std::wstring>& extraArgs,
                L"PATH'ta bulunamadi.\"}");
         return -1;
     }
-    std::wstring script = scriptPath();
     if (script.empty()) {
-        onLine(L"{\"ok\":false,\"error\":\"tiktok_uploader.py .exe yaninda "
-               L"bulunamadi.\"}");
+        onLine(L"{\"ok\":false,\"error\":\"" + std::wstring(scriptName) +
+               L" .exe yaninda bulunamadi.\"}");
         return -1;
     }
 
@@ -117,12 +135,15 @@ bool isPythonAvailable() {
 }
 
 std::wstring scriptPath() {
-    std::wstring d = exeDir();
-    if (d.empty()) return L"";
-    std::wstring p = d + L"\\tiktok_uploader.py";
-    DWORD attr = GetFileAttributesW(p.c_str());
-    if (attr == INVALID_FILE_ATTRIBUTES) return L"";
-    return p;
+    return scriptPathFor(L"tiktok_uploader.py");
+}
+
+bool isInstagramAvailable() {
+    return !findPython().empty() && !instagramScriptPath().empty();
+}
+
+std::wstring instagramScriptPath() {
+    return scriptPathFor(L"instagram_uploader.py");
 }
 
 UploadResult runSetup(const LogFn& log, const std::atomic<bool>& cancel) {
@@ -130,7 +151,7 @@ UploadResult runSetup(const LogFn& log, const std::atomic<bool>& cancel) {
     bool gotDone = false;
     std::wstring lastError;
 
-    int code = runHelper({L"setup"}, [&](const std::wstring& line) {
+    int code = runHelper(scriptPath(), L"tiktok_uploader.py", {L"setup"}, [&](const std::wstring& line) {
         Json j = parseLine(line);
         if (j.isNull()) { log(line); return; }
         if (j.has("error") && !j["error"].asStr().empty()) {
@@ -154,9 +175,38 @@ UploadResult runSetup(const LogFn& log, const std::atomic<bool>& cancel) {
     return r;
 }
 
+UploadResult runInstagramSetup(const LogFn& log, const std::atomic<bool>& cancel) {
+    UploadResult r;
+    bool gotDone = false;
+    std::wstring lastError;
+
+    int code = runHelper(instagramScriptPath(), L"instagram_uploader.py", {L"setup"}, [&](const std::wstring& line) {
+        Json j = parseLine(line);
+        if (j.isNull()) { log(line); return; }
+        if (j.has("error") && !j["error"].asStr().empty()) {
+            lastError = s2w(j["error"].asStr());
+        }
+        if (j["stage"].asStr() == "login_open") {
+            log(L"[instagram] " + s2w(j["msg"].asStr()));
+        } else if (j["stage"].asStr() == "done" && j["ok"].asBool()) {
+            gotDone = true;
+        } else {
+            log(line);
+        }
+    }, cancel);
+
+    r.success = (code == 0) && gotDone;
+    if (!r.success && r.error.empty()) {
+        r.error = lastError.empty()
+            ? L"Instagram setup beklenmedik sekilde sonlandi"
+            : lastError;
+    }
+    return r;
+}
+
 LoginStatus getStatus(const LogFn& log, const std::atomic<bool>& cancel) {
     LoginStatus st;
-    int code = runHelper({L"status"}, [&](const std::wstring& line) {
+    int code = runHelper(scriptPath(), L"tiktok_uploader.py", {L"status"}, [&](const std::wstring& line) {
         Json j = parseLine(line);
         if (j.isNull()) { log(line); return; }
         if (j.has("logged_in")) {
@@ -189,7 +239,7 @@ UploadResult uploadOne(const std::wstring& filePath,
     bool seenPosted = false;
     std::wstring lastError;
 
-    int code = runHelper(args, [&](const std::wstring& line) {
+    int code = runHelper(scriptPath(), L"tiktok_uploader.py", args, [&](const std::wstring& line) {
         Json j = parseLine(line);
         if (j.isNull()) { log(line); return; }
         std::wstring s = s2w(j["stage"].asStr());
@@ -201,7 +251,11 @@ UploadResult uploadOne(const std::wstring& filePath,
             seenPosted = true;
         }
         if (!s.empty()) {
-            log(L"[browser] " + s);
+            std::wstring detail;
+            if (j.has("selector") && !j["selector"].asStr().empty()) {
+                detail = L" (" + s2w(j["selector"].asStr()) + L")";
+            }
+            log(L"[browser] " + s + detail);
         } else {
             log(line);
         }
@@ -211,6 +265,51 @@ UploadResult uploadOne(const std::wstring& filePath,
     if (!r.success && r.error.empty()) {
         r.error = lastError.empty()
             ? (L"upload helper exit " + std::to_wstring(code))
+            : lastError;
+    }
+    return r;
+}
+
+UploadResult uploadInstagramOne(const std::wstring& filePath,
+                                const std::wstring& caption,
+                                const LogFn& log,
+                                const StageFn& stage,
+                                const std::atomic<bool>& cancel) {
+    UploadResult r;
+    std::vector<std::wstring> args = {
+        L"upload",
+        L"--file",    filePath,
+        L"--caption", caption,
+    };
+    bool seenPosted = false;
+    std::wstring lastError;
+
+    int code = runHelper(instagramScriptPath(), L"instagram_uploader.py", args, [&](const std::wstring& line) {
+        Json j = parseLine(line);
+        if (j.isNull()) { log(line); return; }
+        std::wstring s = s2w(j["stage"].asStr());
+        if (!s.empty()) stage(s);
+        if (j.has("error") && !j["error"].asStr().empty()) {
+            lastError = s2w(j["error"].asStr());
+        }
+        if (j["stage"].asStr() == "posted" && j["ok"].asBool()) {
+            seenPosted = true;
+        }
+        if (!s.empty()) {
+            std::wstring detail;
+            if (j.has("selector") && !j["selector"].asStr().empty()) {
+                detail = L" (" + s2w(j["selector"].asStr()) + L")";
+            }
+            log(L"[instagram] " + s + detail);
+        } else {
+            log(line);
+        }
+    }, cancel);
+
+    r.success = (code == 0) && seenPosted;
+    if (!r.success && r.error.empty()) {
+        r.error = lastError.empty()
+            ? (L"Instagram upload helper exit " + std::to_wstring(code))
             : lastError;
     }
     return r;
