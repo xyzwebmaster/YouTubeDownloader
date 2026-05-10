@@ -602,7 +602,7 @@ static HWND createMainWindow() {
     AppendMenuW(hFile, MF_STRING, IDM_FILE_EXIT, L"E&xit");
     AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hFile, L"&File");
     HMENU hTools = CreatePopupMenu();
-    AppendMenuW(hTools, MF_STRING, IDM_TOOLS_TIKTOK, L"&TikTok ayarlari...");
+    AppendMenuW(hTools, MF_STRING, IDM_TOOLS_TIKTOK, L"&TikTok settings...");
     AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hTools, L"&Tools");
     HMENU hHelp  = CreatePopupMenu();
     AppendMenuW(hHelp, MF_STRING, IDM_HELP_ABOUT, L"&About");

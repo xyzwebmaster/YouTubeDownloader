@@ -34,7 +34,7 @@ except ImportError:
     emit({
         "ok": False,
         "error": (
-            "Playwright kurulu degil. Bir terminalde:\n"
+            "Playwright is not installed. In a terminal, run:\n"
             "    pip install playwright\n"
             "    python -m playwright install chromium"
         ),
@@ -101,13 +101,13 @@ def cmd_setup(args) -> int:
         try:
             page.goto("https://www.instagram.com/accounts/login/", timeout=60000)
         except Exception as e:
-            emit({"ok": False, "error": f"Instagram login sayfasi acilamadi: {e}"})
+            emit({"ok": False, "error": f"Instagram login page could not be opened: {e}"})
             return 1
         emit({
             "stage": "login_open",
             "msg": (
-                "Acilan pencereden Instagram'a giris yap. "
-                "Pencereyi kapatinca kayit biter."
+                "Sign in to Instagram from the browser window. "
+                "Close the window when you are done to save the session."
             ),
         })
 
@@ -337,7 +337,7 @@ def _open_create_flow(page) -> None:
         return
     except Exception as e:
         raise RuntimeError(
-            "Instagram Reels create flow acilamadi: "
+            "Instagram Reels create flow could not be opened: "
             + str(e)
         )
 
@@ -419,7 +419,7 @@ def _mark_caption_editor(page) -> bool:
 
 def _fill_caption(page, caption: str) -> None:
     if not _mark_caption_editor(page):
-        raise RuntimeError("Instagram aciklama alani bulunamadi")
+        raise RuntimeError("Instagram caption field was not found")
 
     editor = page.locator(f"[{CAPTION_MARK}='1']").first
     tag = (editor.evaluate("(el) => el.tagName") or "").lower()
@@ -521,7 +521,7 @@ def _advance_to_caption(page) -> None:
         emit({"stage": "advance", "selector": label})
         page.wait_for_timeout(2500)
     if not _mark_caption_editor(page):
-        raise RuntimeError("Instagram aciklama adimina gecilemedi")
+        raise RuntimeError("Instagram caption step could not be reached")
 
 
 def _wait_for_post_success(page) -> bool:
@@ -626,7 +626,7 @@ def _wait_for_post_success(page) -> bool:
 def cmd_upload(args) -> int:
     file_path = Path(args.file).resolve()
     if not file_path.is_file():
-        emit({"ok": False, "error": f"dosya bulunamadi: {file_path}"})
+        emit({"ok": False, "error": f"File not found: {file_path}"})
         return 1
 
     with sync_playwright() as p:
@@ -654,7 +654,7 @@ def cmd_upload(args) -> int:
             emit({
                 "ok": False,
                 "stage": "post-wait",
-                "error": "3 dk icinde Instagram basari onayi alinamadi",
+                "error": "Instagram success confirmation was not detected within 3 minutes",
             })
             return 1
         except Exception as e:

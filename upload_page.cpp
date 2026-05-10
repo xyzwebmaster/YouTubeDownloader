@@ -185,7 +185,7 @@ void onAdd() {
     ofn.nMaxFile    = sizeof(buf) / sizeof(wchar_t);
     ofn.Flags       = OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_FILEMUSTEXIST |
                       OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
-    ofn.lpstrTitle  = L"Yuklenecek videolari sec";
+    ofn.lpstrTitle  = L"Select videos to upload";
     if (!GetOpenFileNameW(&ofn)) return;
 
     // OPENFILENAME with multi-select returns either a single full path
@@ -254,7 +254,7 @@ void enumerateVideos(const std::wstring& root, std::vector<std::wstring>& out) {
 void onAddFolder() {
     BROWSEINFOW bi{};
     bi.hwndOwner = g_hWnd;
-    bi.lpszTitle = L"Klasor sec";
+    bi.lpszTitle = L"Select folder";
     bi.ulFlags   = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
     LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
     if (!pidl) return;
@@ -418,8 +418,8 @@ std::vector<int> collectQueue() {
 
 void onUpload() {
     if (g_busy.load()) {
-        MessageBoxW(g_hWnd, L"Bir is zaten calisiyor (download veya upload).",
-                    L"Mesgul", MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(g_hWnd, L"A download or upload is already running.",
+                    L"Busy", MB_OK | MB_ICONINFORMATION);
         return;
     }
 
@@ -429,9 +429,8 @@ void onUpload() {
         OAuth::Tokens t;
         if (!OAuth::loadTokens(t) || t.access_token.empty()) {
             MessageBoxW(g_hWnd,
-                L"API modunda yuklemek icin Tools -> TikTok ayarlari'ndan "
-                L"baglanmalisin.",
-                L"TikTok bagli degil", MB_OK | MB_ICONWARNING);
+                L"To upload in API mode, connect from Tools -> TikTok settings.",
+                L"TikTok is not connected", MB_OK | MB_ICONWARNING);
             return;
         }
         if (!OAuth::isTokenValid(t)) {
@@ -441,7 +440,7 @@ void onUpload() {
             OAuth::AuthResult ar = OAuth::tiktokRefresh(key, secret, t.refresh_token);
             if (!ar.success) {
                 MessageBoxW(g_hWnd,
-                    (L"Token yenilemesi basarisiz: " + ar.error).c_str(),
+                    (L"Token refresh failed: " + ar.error).c_str(),
                     L"TikTok", MB_OK | MB_ICONERROR);
                 return;
             }
@@ -452,14 +451,14 @@ void onUpload() {
 
         std::vector<int> queue = collectQueue();
         if (queue.empty()) {
-            MessageBoxW(g_hWnd, L"En az bir dosya isaretle.",
-                        L"Hicbir dosya yok", MB_OK | MB_ICONINFORMATION);
+            MessageBoxW(g_hWnd, L"Select at least one file.",
+                        L"No files selected", MB_OK | MB_ICONINFORMATION);
             return;
         }
 
         SendMessage(hProgress, PBM_SETRANGE32, 0, 1000);
         SendMessage(hProgress, PBM_SETPOS,     0, 0);
-        appendLog(L"[upload] API modu, " + std::to_wstring(queue.size()) + L" dosya");
+        appendLog(L"[upload] API mode, " + std::to_wstring(queue.size()) + L" file(s)");
 
         g_cancelRequested.store(false);
         g_busy.store(true);
@@ -475,18 +474,18 @@ void onUpload() {
         : UploadBrowser::isPythonAvailable();
     if (!helperReady) {
         MessageBoxW(g_hWnd,
-            L"Browser modu Python + Playwright gerektirir.\n\n"
-            L"Bir terminalde:\n"
+            L"Browser mode requires Python + Playwright.\n\n"
+            L"In a terminal, run:\n"
             L"  pip install playwright\n"
             L"  python -m playwright install chromium",
-            L"Python yok", MB_OK | MB_ICONWARNING);
+            L"Python not found", MB_OK | MB_ICONWARNING);
         return;
     }
 
     std::vector<int> queue = collectQueue();
     if (queue.empty()) {
-        MessageBoxW(g_hWnd, L"En az bir dosya isaretle.",
-                    L"Hicbir dosya yok", MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(g_hWnd, L"Select at least one file.",
+                    L"No files selected", MB_OK | MB_ICONINFORMATION);
         return;
     }
 
@@ -500,12 +499,12 @@ void onUpload() {
 
     SendMessage(hProgress, PBM_SETRANGE32, 0, 1000);
     SendMessage(hProgress, PBM_SETPOS,     0, 500);   // indeterminate-ish
-    appendLog((instagramMode ? L"[upload] Instagram Reels Browser modu, "
-                              : L"[upload] TikTok Browser modu, ")
-              + std::to_wstring(queue.size()) + L" dosya");
+    appendLog((instagramMode ? L"[upload] Instagram Reels Browser mode, "
+                              : L"[upload] TikTok Browser mode, ")
+              + std::to_wstring(queue.size()) + L" file(s)");
     appendLog(instagramMode
-        ? L"[upload] Instagram Reels caption = dosya basligi + aciklama alani."
-        : L"[upload] DIKKAT: TikTok otomasyonu hesap banina yol acabilir.");
+        ? L"[upload] Instagram Reels caption = file title + Description field."
+        : L"[upload] WARNING: TikTok automation can put the account at risk.");
 
     g_cancelRequested.store(false);
     g_busy.store(true);
@@ -529,16 +528,16 @@ void onBrowserSetup() {
         : UploadBrowser::isPythonAvailable();
     if (!helperReady) {
         MessageBoxW(g_hWnd,
-            L"Python + Playwright gerekli.\n\n"
-            L"Bir terminalde:\n"
+            L"Python + Playwright are required.\n\n"
+            L"In a terminal, run:\n"
             L"  pip install playwright\n"
             L"  python -m playwright install chromium",
-            L"Python yok", MB_OK | MB_ICONWARNING);
+            L"Python not found", MB_OK | MB_ICONWARNING);
         return;
     }
     appendLog(instagramMode
-        ? L"[instagram] setup baslatildi - acilan pencereye giris yap"
-        : L"[browser] setup baslatildi - acilan pencereye giris yap");
+        ? L"[instagram] setup started - sign in from the browser window"
+        : L"[browser] setup started - sign in from the browser window");
     g_cancelRequested.store(false);
     g_busy.store(true);
     setBusyUi(true);
@@ -590,13 +589,13 @@ void applyModeUi() {
             : L"Caption:");
     SetWindowTextW(hInfo,
         m == UploadMode::InstagramBrowser
-            ? L"Instagram Reels Browser modu: caption dosya basligi + aciklama alanindan olusur. "
-              L"Coklu secimde her video sirayla paylasilir."
+            ? L"Instagram Reels Browser mode: caption is file title + Description field. "
+              L"Bulk uploads share each selected video in order."
         : m == UploadMode::TikTokBrowser
-            ? L"Browser modu: TikTok'a tarayici uzerinden dogrudan post atilir. "
-              L"Hesap banı riski var, test hesabiyla dene."
-            : L"API / Inbox modu: video TikTok uygulamasinda Drafts'a duser. "
-              L"Caption ve privacy'i orada belirleyip Post tusuna basacaksin.");
+            ? L"Browser mode: posts directly to TikTok through the browser. "
+              L"Account restrictions are possible; test with a spare account."
+            : L"API / Inbox mode: the video lands in Drafts inside the TikTok app. "
+              L"Set caption and privacy there, then press Post.");
 }
 
 }  // namespace
@@ -605,12 +604,12 @@ std::vector<HWND> createControls(HWND parent, HFONT font) {
     HINSTANCE hInst = (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE);
     auto setFont = [font](HWND h) { SendMessageW(h, WM_SETFONT, (WPARAM)font, TRUE); };
 
-    hStatus = CreateWindowExW(0, L"STATIC", L"TikTok: Bagli degil",
+    hStatus = CreateWindowExW(0, L"STATIC", L"TikTok: Not connected",
         WS_CHILD | SS_LEFT, 0, 0, 100, 24,
         parent, (HMENU)(INT_PTR)ID_UP_STATUS, hInst, nullptr);
     setFont(hStatus);
 
-    hSettings = CreateWindowExW(0, L"BUTTON", L"TikTok ayarlari...",
+    hSettings = CreateWindowExW(0, L"BUTTON", L"TikTok settings...",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 100, 24,
         parent, (HMENU)(INT_PTR)ID_UP_SETTINGS, hInst, nullptr);
     setFont(hSettings);
@@ -671,8 +670,8 @@ std::vector<HWND> createControls(HWND parent, HFONT font) {
     setFont(hAddFolder);
 
     hInfo = CreateWindowExW(0, L"STATIC",
-        L"Sandbox / Inbox modu: video TikTok uygulamasinda Drafts'a duser. "
-        L"Caption ve privacy'i orada belirleyip Post tusuna basacaksin.",
+        L"Sandbox / Inbox mode: the video lands in Drafts inside the TikTok app. "
+        L"Set caption and privacy there, then press Post.",
         WS_CHILD | SS_LEFT, 0, 0, 100, 36,
         parent, (HMENU)(INT_PTR)ID_UP_INFO, hInst, nullptr);
     setFont(hInfo);
@@ -834,11 +833,11 @@ bool onAppMessage(UINT msg, WPARAM /*wp*/, LPARAM lp) {
         if (p->cancelled)
             appendLog(L"[upload] cancelled. " +
                       std::to_wstring(p->succeeded) + L"/" +
-                      std::to_wstring(p->total) + L" basarili.");
+                      std::to_wstring(p->total) + L" succeeded.");
         else
             appendLog(L"[upload] done. " +
                       std::to_wstring(p->succeeded) + L"/" +
-                      std::to_wstring(p->total) + L" basarili.");
+                      std::to_wstring(p->total) + L" succeeded.");
         setBusyUi(false);
         refreshAccountStatus();
         delete p;
@@ -871,26 +870,26 @@ void refreshAccountStatus() {
     if (mode == UploadMode::InstagramBrowser) {
         SetWindowTextW(hStatus,
             Settings::get("instagram.browser_setup") == "done"
-                ? L"Instagram Reels: giris kaydedildi"
-                : L"Instagram Reels: Browser setup ile giris yap");
+                ? L"Instagram Reels: signed in"
+                : L"Instagram Reels: sign in with Browser setup");
         return;
     }
     if (mode == UploadMode::TikTokBrowser) {
         SetWindowTextW(hStatus,
             Settings::get("tiktok.browser_setup") == "done"
-                ? L"TikTok Browser: giris kaydedildi"
-                : L"TikTok Browser: Browser setup ile giris yap");
+                ? L"TikTok Browser: signed in"
+                : L"TikTok Browser: sign in with Browser setup");
         return;
     }
 
     OAuth::Tokens t;
     std::wstring text;
     if (OAuth::loadTokens(t) && OAuth::isTokenValid(t)) {
-        text = L"TikTok: Bagli (open_id: " + s2w(t.open_id) + L")";
+        text = L"TikTok: Connected (open_id: " + s2w(t.open_id) + L")";
     } else if (!t.access_token.empty()) {
-        text = L"TikTok: Token expired — Settings'ten yenile";
+        text = L"TikTok: Token expired - refresh in Settings";
     } else {
-        text = L"TikTok: Bagli degil — Settings'ten ayarla";
+        text = L"TikTok: Not connected - configure in Settings";
     }
     SetWindowTextW(hStatus, text.c_str());
 }

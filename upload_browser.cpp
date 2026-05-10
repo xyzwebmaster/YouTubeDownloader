@@ -77,13 +77,13 @@ int runHelper(const std::wstring& script,
               const std::atomic<bool>& cancel) {
     std::wstring py = findPython();
     if (py.empty()) {
-        onLine(L"{\"ok\":false,\"error\":\"Python (python.exe veya py.exe) "
-               L"PATH'ta bulunamadi.\"}");
+        onLine(L"{\"ok\":false,\"error\":\"Python (python.exe or py.exe) "
+               L"was not found on PATH.\"}");
         return -1;
     }
     if (script.empty()) {
         onLine(L"{\"ok\":false,\"error\":\"" + std::wstring(scriptName) +
-               L" .exe yaninda bulunamadi.\"}");
+               L" was not found next to the .exe.\"}");
         return -1;
     }
 
@@ -101,7 +101,7 @@ int runHelper(const std::wstring& script,
 
     PipedProcess p = startProcess(buildCmdLine(args));
     if (!p.process) {
-        onLine(L"{\"ok\":false,\"error\":\"Python alt-process baslatilamadi.\"}");
+        onLine(L"{\"ok\":false,\"error\":\"Python helper process could not be started.\"}");
         return -1;
     }
     {

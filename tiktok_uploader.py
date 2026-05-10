@@ -56,7 +56,7 @@ except ImportError:
     emit({
         "ok": False,
         "error": (
-            "Playwright kurulu degil. Bir terminalde:\n"
+            "Playwright is not installed. In a terminal, run:\n"
             "    pip install playwright\n"
             "    python -m playwright install chromium"
         ),
@@ -128,11 +128,11 @@ def cmd_setup(args) -> int:
         try:
             page.goto("https://www.tiktok.com/login", timeout=60000)
         except Exception as e:
-            emit({"ok": False, "error": f"login sayfasi acilamadi: {e}"})
+            emit({"ok": False, "error": f"Login page could not be opened: {e}"})
             return 1
         emit({"stage": "login_open",
-              "msg": "Acilan pencereden TikTok'a giris yap. "
-                     "Pencereyi kapatinca kayit biter."})
+              "msg": "Sign in to TikTok from the browser window. "
+                     "Close the window when you are done to save the session."})
 
         # Just wait until the user closes the only page (or the whole
         # context). We don't auto-detect login completion because the
@@ -305,7 +305,7 @@ def _wait_for_post_success(page) -> bool:
 def cmd_upload(args) -> int:
     file_path = Path(args.file).resolve()
     if not file_path.is_file():
-        emit({"ok": False, "error": f"dosya bulunamadi: {file_path}"})
+        emit({"ok": False, "error": f"File not found: {file_path}"})
         return 1
 
     with sync_playwright() as p:
@@ -332,7 +332,7 @@ def cmd_upload(args) -> int:
                 post_selector = _click_post(page)
             except Exception as e:
                 emit({"ok": False, "error":
-                      f"Post butonu bulunamadi / aktiflesmedi: {e}"})
+                      f"Post button was not found or did not become enabled: {e}"})
                 return 1
             emit({"stage": "post_clicked", "selector": post_selector})
 
@@ -342,7 +342,7 @@ def cmd_upload(args) -> int:
                 emit({"ok": True, "stage": "posted"})
                 return 0
             emit({"ok": False, "stage": "post-wait",
-                  "error": "3 dk icinde basari onayi alinamadi"})
+                  "error": "Success confirmation was not detected within 3 minutes"})
             return 1
         except Exception as e:
             emit({"ok": False, "error": str(e),

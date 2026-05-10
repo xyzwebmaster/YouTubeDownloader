@@ -69,7 +69,7 @@ UploadResult uploadInbox(const std::wstring& filePath,
     HANDLE h = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ,
                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) {
-        r.error = L"Dosya acilamadi: " + filePath;
+        r.error = L"File could not be opened: " + filePath;
         return r;
     }
     LARGE_INTEGER sz{};
@@ -81,7 +81,7 @@ UploadResult uploadInbox(const std::wstring& filePath,
     long long total = sz.QuadPart;
     if (total == 0) {
         CloseHandle(h);
-        r.error = L"Bos dosya";
+        r.error = L"Empty file";
         return r;
     }
 

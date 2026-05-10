@@ -67,14 +67,14 @@ void appendLog(HWND log, const std::wstring& line) {
 void updateStatusLine(DlgState* s) {
     OAuth::Tokens t;
     if (OAuth::loadTokens(t) && OAuth::isTokenValid(t)) {
-        std::wstring msg = L"Bagli (open_id: " + s2w(t.open_id) + L")";
+        std::wstring msg = L"Connected (open_id: " + s2w(t.open_id) + L")";
         SetWindowTextW(s->hStatus, msg.c_str());
         EnableWindow(s->hDisconnect, TRUE);
     } else if (!t.access_token.empty()) {
-        SetWindowTextW(s->hStatus, L"Token süresi doldu — Connect ile yenile");
+        SetWindowTextW(s->hStatus, L"Token expired - reconnect with Connect");
         EnableWindow(s->hDisconnect, TRUE);
     } else {
-        SetWindowTextW(s->hStatus, L"Bagli degil");
+        SetWindowTextW(s->hStatus, L"Not connected");
         EnableWindow(s->hDisconnect, FALSE);
     }
 }
@@ -116,7 +116,7 @@ void onConnect(HWND hwnd, DlgState* s) {
     }
     if (port <= 0 || port > 65535) port = 53682;
     if (key.empty() || secret.empty()) {
-        MessageBoxW(hwnd, L"Client Key ve Client Secret gerekli.",
+        MessageBoxW(hwnd, L"Client Key and Client Secret are required.",
                     L"TikTok", MB_OK | MB_ICONWARNING);
         return;
     }
@@ -265,7 +265,7 @@ bool showTikTokSettingsDialog(HWND parent) {
     if (x < 0) x = 0;
     if (y < 0) y = 0;
 
-    HWND dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, kClass, L"TikTok ayarlari",
+    HWND dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, kClass, L"TikTok settings",
         WS_POPUPWINDOW | WS_CAPTION,
         x, y, W, H, parent, nullptr, hInst, nullptr);
     if (!dlg) {
@@ -321,8 +321,8 @@ bool showTikTokSettingsDialog(HWND parent) {
     } else {
         // Embedded-mode banner. No fields to fill — go straight to Connect.
         HWND banner = CreateWindowExW(0, L"STATIC",
-            L"App credentials uygulamaya gomulu — Connect'e bas, "
-            L"tarayicidan giris yap.",
+            L"App credentials are embedded - click Connect, then sign in "
+            L"from the browser.",
             WS_CHILD | WS_VISIBLE | SS_LEFT,
             padX, row + 4, W - 2 * padX, rowH - 4,
             dlg, nullptr, hInst, nullptr);
@@ -339,7 +339,7 @@ bool showTikTokSettingsDialog(HWND parent) {
     setFont(st.hScope);
     row += rowH + 12;
 
-    mkLabel(dlg, hInst, st.hFont, padX, row + 4, lblW, rowH - 4, L"Durum:");
+    mkLabel(dlg, hInst, st.hFont, padX, row + 4, lblW, rowH - 4, L"Status:");
     st.hStatus = CreateWindowExW(0, L"STATIC", L"...",
         WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_NOPREFIX,
         ctrlX, row + 4, W - ctrlX - padX, rowH - 4,

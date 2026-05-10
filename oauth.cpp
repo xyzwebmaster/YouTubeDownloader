@@ -346,11 +346,11 @@ AuthResult tiktokAuthorize(const std::string& clientKey,
                            const std::atomic<bool>& cancel) {
     AuthResult ar;
     if (clientKey.empty() || clientSecret.empty()) {
-        ar.error = L"Client Key ve Client Secret bos olamaz.";
+        ar.error = L"Client Key and Client Secret cannot be empty.";
         return ar;
     }
     if (redirectUri.empty()) {
-        ar.error = L"Redirect URI bos olamaz.";
+        ar.error = L"Redirect URI cannot be empty.";
         return ar;
     }
 
@@ -369,7 +369,7 @@ AuthResult tiktokAuthorize(const std::string& clientKey,
     HINSTANCE rc = ShellExecuteW(nullptr, L"open", authUrl.c_str(),
                                  nullptr, nullptr, SW_SHOWNORMAL);
     if ((INT_PTR)rc <= 32) {
-        ar.error = L"Tarayici acilamadi. URL'i manuel kopyala:\n" + authUrl;
+        ar.error = L"Browser could not be opened. Copy this URL manually:\n" + authUrl;
         return ar;
     }
 
