@@ -16,6 +16,8 @@ import time
 import traceback
 from pathlib import Path
 
+INSTAGRAM_CAPTION_LIMIT = 2200
+
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -383,13 +385,29 @@ def _mark_caption_editor(page) -> bool:
                     .querySelectorAll("[" + captionMark + "='1']")
                     .forEach((el) => el.removeAttribute(captionMark));
 
-                const candidates = [
+                const labelOf = (el) => {
+                    const nearby = el.closest("label,[role='textbox']") || el.parentElement;
+                    return [
+                        el.getAttribute("aria-label"),
+                        el.getAttribute("placeholder"),
+                        el.getAttribute("data-placeholder"),
+                        el.getAttribute("title"),
+                        nearby ? nearby.textContent : "",
+                    ].filter(Boolean).join(" ").replace(/\\s+/g, " ").trim();
+                };
+
+                const badWords = /search|comment|emoji|location|tag people|alt text/i;
+                const captionWords =
+                    /caption|write a caption|description|açıklama|aciklama|başlık|baslik/i;
+
+                const nodes = [
                     ...root.querySelectorAll("textarea"),
                     ...root.querySelectorAll("[contenteditable='true'][role='textbox']"),
                     ...root.querySelectorAll("[contenteditable='true']"),
                 ];
 
-                for (const el of candidates) {
+                const candidates = [];
+                for (const el of nodes) {
                     if (!(el instanceof HTMLElement)) continue;
                     const rect = el.getBoundingClientRect();
                     const style = window.getComputedStyle(el);
@@ -403,10 +421,26 @@ def _mark_caption_editor(page) -> bool:
                         el.getAttribute("aria-disabled") === "true") {
                         continue;
                     }
-                    el.setAttribute(captionMark, "1");
-                    return true;
+                    const label = labelOf(el);
+                    if (badWords.test(label)) continue;
+
+                    let score = 0;
+                    if (captionWords.test(label)) score += 10000;
+                    if (el.matches("textarea")) score += 1000;
+                    if (el.getAttribute("role") === "textbox") score += 750;
+                    if (el.isContentEditable) score += 500;
+                    score += Math.min(rect.width, 600);
+                    candidates.push({ el, score, label });
                 }
-                return false;
+
+                candidates.sort((a, b) => b.score - a.score);
+                if (!candidates.length) return false;
+                candidates[0].el.setAttribute(captionMark, "1");
+                candidates[0].el.setAttribute(
+                    "data-ytdl-instagram-caption-label",
+                    candidates[0].label || "caption"
+                );
+                return true;
             }
             """,
             arg={"captionMark": CAPTION_MARK},
@@ -417,21 +451,71 @@ def _mark_caption_editor(page) -> bool:
         return False
 
 
+def _normalize_caption_value(text: str) -> str:
+    return (text or "").replace("\r\n", "\n").replace("\r", "\n").replace("\u200b", "")
+
+
+def _read_caption_editor(editor) -> str:
+    value = editor.evaluate(
+        """
+        (el) => {
+            if ("value" in el) return el.value || "";
+            return el.innerText || el.textContent || "";
+        }
+        """
+    )
+    return _normalize_caption_value(value or "")
+
+
+def _compact_caption_probe(text: str) -> str:
+    compact = "".join(_normalize_caption_value(text).split()).lower()
+    return compact[:80]
+
+
+def _caption_was_written(written: str, expected: str) -> bool:
+    written = _normalize_caption_value(written).strip()
+    if not written:
+        return False
+    expected_probe = _compact_caption_probe(expected)
+    if not expected_probe:
+        return True
+    written_compact = _compact_caption_probe(written)
+    return expected_probe[:20] in written_compact
+
+
 def _fill_caption(page, caption: str) -> None:
     if not _mark_caption_editor(page):
         raise RuntimeError("Instagram caption field was not found")
 
+    caption = _normalize_caption_value(caption).strip()
+    if not caption:
+        raise RuntimeError("Caption is empty; refusing to publish without a caption")
+    if len(caption) > INSTAGRAM_CAPTION_LIMIT:
+        caption = caption[:INSTAGRAM_CAPTION_LIMIT].rstrip()
+        emit({
+            "stage": "caption_truncated",
+            "selector": f"{INSTAGRAM_CAPTION_LIMIT} chars",
+        })
+
     editor = page.locator(f"[{CAPTION_MARK}='1']").first
-    tag = (editor.evaluate("(el) => el.tagName") or "").lower()
-    if tag == "textarea":
-        editor.fill(caption)
+    editor.fill(caption, timeout=15000)
+    page.wait_for_timeout(700)
+    written = _read_caption_editor(editor)
+    if _caption_was_written(written, caption):
+        emit({"stage": "caption_filled", "selector": f"{len(caption)} chars"})
         return
 
     editor.click(timeout=10000)
     page.keyboard.press("Control+A")
     page.keyboard.press("Delete")
-    if caption:
-        page.keyboard.insert_text(caption)
+    page.keyboard.insert_text(caption)
+    page.wait_for_timeout(500)
+    written = _read_caption_editor(editor).strip()
+    if not _caption_was_written(written, caption):
+        if not written:
+            raise RuntimeError("Caption stayed empty after filling; publish was stopped")
+        raise RuntimeError("Caption verification failed; publish was stopped")
+    emit({"stage": "caption_filled", "selector": f"{len(caption)} chars"})
 
 
 def _click_primary_dialog_action(page, kind: str, *, timeout: int = 90000) -> str:
