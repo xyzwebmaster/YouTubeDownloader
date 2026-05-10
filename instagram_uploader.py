@@ -52,6 +52,7 @@ ACTION_KIND_MARK = "data-ytdl-instagram-action-kind"
 CAPTION_MARK = "data-ytdl-instagram-caption"
 CREATE_MARK = "data-ytdl-instagram-create"
 FILE_INPUT_MARK = "data-ytdl-instagram-file"
+DONE_MARK = "data-ytdl-instagram-done"
 
 
 def open_context(p, *, headless: bool):
@@ -527,25 +528,96 @@ def _wait_for_post_success(page) -> bool:
     try:
         page.wait_for_function(
             """
-            () => {
+            ({ doneMark }) => {
                 const visible = (el) => {
                     if (!(el instanceof HTMLElement)) return false;
                     const rect = el.getBoundingClientRect();
                     const style = window.getComputedStyle(el);
                     return rect.width > 0 && rect.height > 0 &&
                         style.display !== "none" &&
-                        style.visibility !== "hidden";
+                        style.visibility !== "hidden" &&
+                        style.pointerEvents !== "none";
                 };
+
+                const enabled = (el) => {
+                    return !el.matches(":disabled") &&
+                        el.getAttribute("aria-disabled") !== "true" &&
+                        el.closest("[aria-disabled='true']") === null;
+                };
+
+                document
+                    .querySelectorAll("[" + doneMark + "='1']")
+                    .forEach((el) => el.removeAttribute(doneMark));
 
                 const dialog = Array
                     .from(document.querySelectorAll("[role='dialog']"))
                     .filter(visible)
                     .at(-1);
-                return !dialog;
+                if (!dialog) return true;
+
+                const successWords =
+                    /shared|posted|uploaded|paylaşıldı|paylasildi|yayınlandı|yayinlandi/i;
+                const dialogText = (dialog.textContent || "").trim();
+                const buttons = Array
+                    .from(dialog.querySelectorAll("button,[role='button'],[tabindex='0']"))
+                    .filter((el) => visible(el) && enabled(el));
+
+                const exactDone = buttons.find((el) => {
+                    const text = (el.textContent || "").trim();
+                    const label = [
+                        el.getAttribute("aria-label"),
+                        el.getAttribute("title"),
+                        text,
+                    ].filter(Boolean).join(" ");
+                    const compact = label.toLocaleLowerCase("tr-TR")
+                        .replace(/\\s+/g, "");
+                    return text.length <= 30 && (
+                        /^(done)+$/.test(compact) ||
+                        /^(bitti)+$/.test(compact) ||
+                        /^(tamam)+$/.test(compact) ||
+                        /^ok$/.test(compact)
+                    );
+                });
+                if (exactDone) {
+                    exactDone.setAttribute(doneMark, "1");
+                    return true;
+                }
+
+                if (successWords.test(dialogText) && buttons.length === 1) {
+                    buttons[0].setAttribute(doneMark, "1");
+                    return true;
+                }
+
+                return false;
             }
             """,
+            arg={"doneMark": DONE_MARK},
             timeout=180000,
         )
+        done = page.locator(f"[{DONE_MARK}='1']").first
+        if done.count() > 0:
+            label = done.evaluate("(el) => (el.textContent || '').trim()") or "Done"
+            done.scroll_into_view_if_needed(timeout=10000)
+            done.click(timeout=10000)
+            emit({"stage": "done_clicked", "selector": label})
+            page.wait_for_function(
+                """
+                () => {
+                    const visible = (el) => {
+                        if (!(el instanceof HTMLElement)) return false;
+                        const rect = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+                        return rect.width > 0 && rect.height > 0 &&
+                            style.display !== "none" &&
+                            style.visibility !== "hidden";
+                    };
+                    return !Array
+                        .from(document.querySelectorAll("[role='dialog']"))
+                        .some(visible);
+                }
+                """,
+                timeout=30000,
+            )
         return True
     except Exception:
         return False
