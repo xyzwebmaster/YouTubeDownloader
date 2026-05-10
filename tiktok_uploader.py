@@ -269,7 +269,7 @@ def _click_post(page):
             return false;
         }
         """,
-        {
+        arg={
             "selectors": POST_BUTTON_SELECTORS,
             "targetMark": POST_BUTTON_MARK,
             "selectorMark": POST_BUTTON_SELECTOR_MARK,

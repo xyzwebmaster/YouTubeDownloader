@@ -50,6 +50,8 @@ PROFILE_DIR = (
 ACTION_MARK = "data-ytdl-instagram-action"
 ACTION_KIND_MARK = "data-ytdl-instagram-action-kind"
 CAPTION_MARK = "data-ytdl-instagram-caption"
+CREATE_MARK = "data-ytdl-instagram-create"
+FILE_INPUT_MARK = "data-ytdl-instagram-file"
 
 
 def open_context(p, *, headless: bool):
@@ -117,9 +119,198 @@ def cmd_setup(args) -> int:
     return 0
 
 
-def _visible_file_input(page):
-    page.wait_for_selector("input[type='file']", state="attached", timeout=60000)
-    return page.locator("input[type='file']").last
+def _mark_upload_file_input(page, *, timeout: int = 60000) -> None:
+    page.wait_for_function(
+        """
+        ({ fileInputMark }) => {
+            const isVisible = (el) => {
+                if (!(el instanceof HTMLElement)) return false;
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return rect.width > 0 && rect.height > 0 &&
+                    style.display !== "none" &&
+                    style.visibility !== "hidden";
+            };
+
+            document
+                .querySelectorAll("[" + fileInputMark + "='1']")
+                .forEach((el) => el.removeAttribute(fileInputMark));
+
+            const dialogs = Array
+                .from(document.querySelectorAll("[role='dialog']"))
+                .filter(isVisible);
+            for (const dialog of dialogs.reverse()) {
+                const inputs = Array
+                    .from(dialog.querySelectorAll("input[type='file']"))
+                    .filter((input) => !input.disabled);
+                if (!inputs.length) continue;
+                inputs.at(-1).setAttribute(fileInputMark, "1");
+                return true;
+            }
+            return false;
+        }
+        """,
+        arg={"fileInputMark": FILE_INPUT_MARK},
+        timeout=timeout,
+    )
+
+
+def _upload_file_input(page):
+    _mark_upload_file_input(page)
+    return page.locator(f"[{FILE_INPUT_MARK}='1']").first
+
+
+def _click_create_button(page) -> str:
+    page.wait_for_function(
+        """
+        ({ createMark }) => {
+            const isVisible = (el) => {
+                if (!(el instanceof HTMLElement)) return false;
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return rect.width > 0 && rect.height > 0 &&
+                    style.display !== "none" &&
+                    style.visibility !== "hidden" &&
+                    style.pointerEvents !== "none";
+            };
+
+            const labelOf = (el) => {
+                const own = [
+                    el.getAttribute("aria-label"),
+                    el.getAttribute("title"),
+                    el.textContent,
+                    ...Array
+                        .from(el.querySelectorAll("[aria-label],title"))
+                        .map((child) => child.getAttribute("aria-label") || child.textContent),
+                ];
+                return own.filter(Boolean).join(" ").trim();
+            };
+
+            document
+                .querySelectorAll("[" + createMark + "='1']")
+                .forEach((el) => el.removeAttribute(createMark));
+
+            const words = /create|new post|oluştur|olustur|paylaş|paylas/i;
+            const candidates = Array
+                .from(document.querySelectorAll("a,button,[role='button'],[tabindex='0']"))
+                .filter((el) => {
+                    if (!isVisible(el)) return false;
+                    if (el.matches(":disabled") ||
+                        el.getAttribute("aria-disabled") === "true") {
+                        return false;
+                    }
+                    const label = labelOf(el);
+                    const href = el.getAttribute("href") || "";
+                    const rect = el.getBoundingClientRect();
+                    const inLeftNav = rect.left < 140 && rect.width >= 24 &&
+                        rect.height >= 24 && rect.top > 80;
+
+                    if (href.includes("/create") && inLeftNav) return true;
+                    if (words.test(label)) return true;
+
+                    const hasPlusLikeSvg = !!el.querySelector(
+                        "svg[aria-label*='New'],svg[aria-label*='Create'],svg[aria-label*='Olu'],svg[aria-label*='Pay']"
+                    );
+                    return inLeftNav && hasPlusLikeSvg;
+                })
+                .map((el) => {
+                    const rect = el.getBoundingClientRect();
+                    const label = labelOf(el);
+                    const href = el.getAttribute("href") || "";
+                    let score = 0;
+                    if (rect.left < 140) score += 10000;
+                    if (words.test(label)) score += 5000;
+                    if (href.includes("/create")) score += 1000;
+                    return { el, score };
+                })
+                .sort((a, b) => b.score - a.score);
+
+            if (!candidates.length) return false;
+            candidates[0].el.setAttribute(createMark, "1");
+            candidates[0].el.setAttribute(
+                "data-ytdl-instagram-create-label",
+                labelOf(candidates[0].el) || "create"
+            );
+            return true;
+        }
+        """,
+        arg={"createMark": CREATE_MARK},
+        timeout=30000,
+    )
+
+    create = page.locator(f"[{CREATE_MARK}='1']").first
+    label = create.get_attribute("data-ytdl-instagram-create-label") or "create"
+    create.click(timeout=10000)
+    return label
+
+
+def _click_create_menu_item(page) -> str:
+    page.wait_for_function(
+        """
+        ({ createMark }) => {
+            const isVisible = (el) => {
+                if (!(el instanceof HTMLElement)) return false;
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return rect.width > 0 && rect.height > 0 &&
+                    style.display !== "none" &&
+                    style.visibility !== "hidden" &&
+                    style.pointerEvents !== "none";
+            };
+
+            const labelOf = (el) => [
+                el.getAttribute("aria-label"),
+                el.getAttribute("title"),
+                el.textContent,
+            ].filter(Boolean).join(" ").trim();
+
+            document
+                .querySelectorAll("[" + createMark + "='1']")
+                .forEach((el) => el.removeAttribute(createMark));
+
+            const words = /new post|post|gönderi|gonderi/i;
+            const roots = [
+                ...document.querySelectorAll("[role='dialog'],[role='menu']"),
+                document.body,
+            ].filter(isVisible);
+
+            const candidates = roots.flatMap((root) => Array
+                .from(root.querySelectorAll("a,button,[role='button'],[role='menuitem'],[tabindex='0']"))
+                .filter((el) => {
+                    if (!isVisible(el)) return false;
+                    if (el.matches(":disabled") ||
+                        el.getAttribute("aria-disabled") === "true") {
+                        return false;
+                    }
+                    const label = labelOf(el);
+                    if (/create|oluştur|olustur/i.test(label)) return false;
+                    return words.test(label);
+                })
+                .map((el) => {
+                    const label = labelOf(el);
+                    let score = 0;
+                    if (/post|gönderi|gonderi|new post/i.test(label)) score += 10000;
+                    return { el, score, label };
+                }));
+
+            candidates.sort((a, b) => b.score - a.score);
+            if (!candidates.length) return false;
+            candidates[0].el.setAttribute(createMark, "1");
+            candidates[0].el.setAttribute(
+                "data-ytdl-instagram-create-label",
+                candidates[0].label || "create menu"
+            );
+            return true;
+        }
+        """,
+        arg={"createMark": CREATE_MARK},
+        timeout=10000,
+    )
+
+    item = page.locator(f"[{CREATE_MARK}='1']").first
+    label = item.get_attribute("data-ytdl-instagram-create-label") or "create menu"
+    item.click(timeout=10000)
+    return label
 
 
 def _open_create_flow(page) -> None:
@@ -133,11 +324,21 @@ def _open_create_flow(page) -> None:
             pass
 
     try:
-        page.goto("https://www.instagram.com/create/reel/", timeout=120000)
-        _visible_file_input(page)
+        _click_create_button(page)
+        try:
+            _mark_upload_file_input(page, timeout=2000)
+            label = "Create"
+        except Exception:
+            _click_create_menu_item(page)
+            label = "Create > Post"
+            _mark_upload_file_input(page, timeout=30000)
+        emit({"stage": "create_opened", "selector": label})
         return
     except Exception as e:
-        raise RuntimeError(f"Instagram Reels create flow acilamadi: {e}")
+        raise RuntimeError(
+            "Instagram Reels create flow acilamadi: "
+            + str(e)
+        )
 
 
 def _wait_for_media_ready(page) -> None:
@@ -207,7 +408,7 @@ def _mark_caption_editor(page) -> bool:
                 return false;
             }
             """,
-            {"captionMark": CAPTION_MARK},
+            arg={"captionMark": CAPTION_MARK},
             timeout=5000,
         )
         return True
@@ -300,7 +501,7 @@ def _click_primary_dialog_action(page, kind: str, *, timeout: int = 90000) -> st
             return true;
         }
         """,
-        {"actionMark": ACTION_MARK, "kindMark": ACTION_KIND_MARK, "kind": kind},
+        arg={"actionMark": ACTION_MARK, "kindMark": ACTION_KIND_MARK, "kind": kind},
         timeout=timeout,
     )
 
@@ -327,8 +528,6 @@ def _wait_for_post_success(page) -> bool:
         page.wait_for_function(
             """
             () => {
-                if (!location.pathname.includes("/create")) return true;
-
                 const visible = (el) => {
                     if (!(el instanceof HTMLElement)) return false;
                     const rect = el.getBoundingClientRect();
@@ -366,7 +565,7 @@ def cmd_upload(args) -> int:
             _open_create_flow(page)
 
             emit({"stage": "uploading"})
-            _visible_file_input(page).set_input_files(str(file_path))
+            _upload_file_input(page).set_input_files(str(file_path))
             _wait_for_media_ready(page)
 
             emit({"stage": "ready"})
